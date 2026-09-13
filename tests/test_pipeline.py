@@ -243,3 +243,22 @@ def test_live_source_drops_oldest_and_resamples():
         _match_device(devices, "speakers")       # an output-only device never matches by name
     with pytest.raises(ValueError, match="no input device"):
         _match_device(devices, "nonexistent")
+
+
+def test_status_reports_input_level_and_warns_on_digital_silence(caplog):
+    """A device that delivers nothing but zeros is the classic 'wrong device' symptom."""
+    cfg = Config()
+    cfg.asr.model = "fake"
+    silence = np.zeros(16000 * 25, dtype=np.float32)
+    source = FileSource("synthetic", realtime=False, audio=silence)
+    statuses = []
+    p = Pipeline(cfg, FakeEngine(), FakeTranslator(), lambda c: None, statuses.append, status_interval_s=0.01)
+    p.run(source)
+    assert statuses and all(s.input_level == 0.0 for s in statuses)
+    assert p.stats.finals == 0
+
+    loud = FileSource("synthetic", realtime=False, audio=np.full(16000, 0.5, dtype=np.float32))
+    statuses2 = []
+    p2 = Pipeline(cfg, FakeEngine(), FakeTranslator(), lambda c: None, statuses2.append, status_interval_s=0.01)
+    p2.run(loud)
+    assert statuses2 and max(s.input_level for s in statuses2) > 0.4

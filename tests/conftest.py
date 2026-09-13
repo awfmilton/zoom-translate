@@ -7,6 +7,13 @@ import pytest
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def isolated_cache(tmp_path, monkeypatch):
+    """Never read or write the developer's real ~/.cache/zoomlt during tests."""
+    monkeypatch.setenv("ZOOMLT_CACHE", str(tmp_path / "zoomlt-cache"))
+    return tmp_path
+
+
 @pytest.fixture(scope="session")
 def es_audio() -> np.ndarray:
     from zoomlt.audio.capture import load_audio_16k

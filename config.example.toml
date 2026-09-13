@@ -1,54 +1,72 @@
-# zoomlt configuration. Copy to config.toml and run:  zoomlt run -c config.toml
-# Every key is optional; anything omitted keeps the default shown here.
+# zoomlt configuration — every key the app reads, with its default.
+# Copy this file to config.toml, edit, then run:   zoomlt run -c config.toml
+# config.toml is git-ignored: it may hold the Zoom caption token, which is a secret.
 
-log_level = "INFO"
+log_level = "INFO"          # DEBUG shows partial captions and timing
 
 [audio]
-# "auto" = WASAPI loopback on Windows when PyAudioWPatch is installed, otherwise sounddevice.
+# "auto" picks: WASAPI loopback on Windows (needs PyAudioWPatch), parec on Linux when available,
+# otherwise sounddevice. Other values: "sounddevice", "wasapi", "parec", "file".
 backend = "auto"
-# Device name substring or index from `zoomlt devices`.
-#   Windows (auto/wasapi): leave unset to capture the default speakers Zoom plays into.
-#   macOS: "BlackHole"       (after routing Zoom's speaker output to a Multi-Output Device)
-#   Linux: "Monitor of"      (the PulseAudio/PipeWire monitor of your output)
+# Device name substring or index from `zoomlt devices`. Unset = the backend's default.
+#   Windows (auto/wasapi): unset captures the default speakers Zoom plays into
+#   macOS: "BlackHole"       (after routing Zoom's output through a Multi-Output Device)
+#   Linux (parec): unset uses @DEFAULT_MONITOR@, or name a sink monitor from `pactl list short sources`
 # device = "BlackHole"
+# file = "recording.mp3"    # backend = "file": caption a recording instead of live audio
+# file_realtime = true      # false = decode as fast as possible (what `zoomlt file --fast` sets)
+block_ms = 32               # capture block size; 32 ms matches the VAD frame
 
 [vad]
-threshold = 0.5           # speech probability that starts an utterance
-neg_threshold = 0.35      # ...and the level it must fall below to count as silence again
-end_silence_ms = 600      # pause length that finishes a sentence (lower = faster, choppier)
-pre_roll_ms = 320         # audio kept from before speech started
-min_speech_ms = 250       # ignore blips shorter than this
-max_utterance_s = 15.0    # force a caption if someone talks this long without pausing
+threshold = 0.5             # speech probability that starts an utterance
+neg_threshold = 0.35        # ...and the level it must fall below to count as silence again
+end_silence_ms = 600        # pause length that finishes a sentence (lower = faster, choppier)
+pre_roll_ms = 320           # audio kept from before speech started
+min_speech_ms = 250         # ignore blips shorter than this
+max_utterance_s = 15.0      # force a caption if someone talks this long without pausing
+cut_search_ms = 2000        # window searched for the quietest frame when forcing that cut
 
 [asr]
-engine = "whisper"        # whisper = any language, English straight out | nemotron = best for es/hi (+ local MT)
-model = "small"           # Whisper size: tiny | base | small | medium | large-v3   (CPU: small; GPU: large-v3)
-device = "auto"           # auto | cpu | cuda
-compute_type = "auto"     # int8 on CPU, float16 on CUDA
-mode = "translate"        # translate = English only | transcribe = original only | dual = both (needs argos)
-languages = []            # e.g. ["es", "hi"] — restricts language detection to what your team speaks
-beam_size = 1             # 1 is fastest; 3-5 is a little more accurate on a fast machine
+engine = "whisper"          # whisper = any language, English straight out | nemotron = best for es/hi (+ local MT)
+model = "small"             # Whisper size: tiny | base | small | medium | large-v3   (CPU: small; GPU: large-v3)
+device = "auto"             # auto | cpu | cuda
+compute_type = "auto"       # int8 on CPU, float16 on CUDA; also int8_float16, float32
+cpu_threads = 0             # 0 = let CTranslate2 decide
+mode = "translate"          # translate = English only | transcribe = original only | dual = both
+languages = []              # e.g. ["es", "hi"] — restricts detection to what your team speaks
+beam_size = 1               # 1 is fastest; 3-5 is a little more accurate on a fast machine
 partial_interval_ms = 1200  # 0 disables in-progress captions (halves CPU work)
 partial_window_s = 8.0      # Whisper partials only re-read the last N seconds (finals read everything)
-# hotwords = "Priya, Kubernetes, Acme"     # names/terms Whisper should spell right
+# download_root = "D:/models"     # where models are cached (default: ~/.cache/huggingface, ~/.cache/zoomlt)
+# hotwords = "Priya, Kubernetes, Acme"    # names/terms Whisper should spell right
 # initial_prompt = "A software startup team meeting."
+# Hallucination guards — Whisper invents text on silence and music. Raise no_speech_threshold to
+# keep more borderline speech; lower it to drop more.
+no_speech_threshold = 0.6
+log_prob_threshold = -1.0
+compression_ratio_threshold = 2.4
+# drop_phrases = ["subtitles by", "amara.org", "thank you for watching"]   # see zoomlt/config.py for the default list
 
 [mt]
-engine = "ct2"            # used in mode = "dual" (and always with engine = "nemotron"): ct2 | argos | none
-auto_install = true       # download the es->en / hi->en models on first use (one time)
+engine = "ct2"              # used in mode "dual" (and always with engine "nemotron"): ct2 | argos | none
+target = "en"
+auto_install = true         # download the es->en / hi->en models on first use (one time)
 beam_size = 2
-# model_dirs = { hi = "/path/to/your/ctranslate2/model" }   # your own converted OPUS-MT model
+# model_dirs = { hi = "/path/to/your/ctranslate2/model" }     # your own converted OPUS-MT model
+# hf_repos  = { es = "gaudi/opus-mt-es-en-ctranslate2" }      # a different CTranslate2 conversion
 
 [server]
-host = "127.0.0.1"        # 0.0.0.0 shares the overlay on your LAN (per-run token in the URL, no encryption)
+host = "127.0.0.1"          # 0.0.0.0 shares the overlay on your LAN (per-run token in the URL, no encryption)
 port = 8765
 open_browser = true
-history = 200
-# transcript_path = "meeting-captions.jsonl"
+history = 200               # captions replayed to a window that opens late
+# transcript_path = "meeting-captions.jsonl"    # append every final caption (file is owner-readable only)
 
 [zoom_cc]
 # Paste the meeting's caption API token URL to push English captions into Zoom for everyone.
-# (Or set the ZOOMLT_ZOOM_CC_URL environment variable. Keep config.toml out of git: it is a secret.)
+# Prefer the ZOOMLT_ZOOM_CC_URL environment variable: command lines are visible in process lists.
 # api_token_url = "https://wmcc.zoom.us/closedcaption?id=...&ns=...&expire=...&sparams=...&signature=..."
 lang = "en-US"
-min_interval_ms = 800
+min_interval_ms = 800       # Zoom throttles bursts; captions are coalesced to this rate
+timeout_s = 5.0
+resume_sequence = true      # continue this meeting's caption numbering after a restart

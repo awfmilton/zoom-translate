@@ -37,6 +37,18 @@ body {
 #lag.slow { color: var(--warn); }
 #lag.bad { color: var(--bad); }
 
+#meter {
+  width: 54px; height: 6px; border-radius: 3px; background: #262c38; overflow: hidden; flex: none;
+}
+#meter-fill { display: block; height: 100%; width: 0; background: var(--accent); transition: width 200ms linear; }
+#meter.silent { box-shadow: 0 0 0 1px var(--warn); }
+#meter.silent #meter-fill { background: var(--warn); }
+
+/* Shown whenever the feed is down: the toolbar (and its status dot) is hidden in compact mode. */
+#offline {
+  padding: 4px 18px; font-size: 13px; color: #0f1115; background: var(--warn); font-weight: 600;
+}
+
 #captions {
   flex: 1; overflow-y: auto; padding: 14px 18px 6px;
   font-size: var(--font); line-height: 1.35;
@@ -61,12 +73,16 @@ body:not(.show-source) .cap .src { display: none; }
 #hint { padding: 8px 18px 14px; color: var(--dim); font-size: 14px; }
 #hint:empty, body.has-captions #hint { display: none; }
 
-/* compact: transparent-ish strip for sitting over Zoom */
+/* compact: a caption strip that sits over Zoom — newest lines at the bottom, no chrome */
 body.compact #bar { display: none; }
 body.compact #hint { display: none; }
 body.compact { background: rgba(10, 12, 16, 0.92); }
-body.compact #captions { padding-top: 8px; }
+body.compact #captions {
+  padding-top: 8px;
+  display: flex; flex-direction: column; justify-content: flex-end;
+}
 body.compact .cap:not(:nth-last-child(-n+3)) { display: none; }
+body.compact .cap { margin-bottom: 6px; }
 
 body.paused #captions { opacity: 0.85; }
 body.paused::after {

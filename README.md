@@ -43,7 +43,7 @@ python -m venv .venv
 pip install -e ".[windows]"      # Windows (adds WASAPI loopback capture)
 pip install -e .                 # macOS / Linux
 
-zoomlt check                     # environment sanity check + effective config
+zoomlt check                     # effective config + the checks that otherwise fail mid-meeting
 zoomlt devices                   # which device carries Zoom's audio (see "Routing Zoom audio")
 zoomlt run -l es -l hi           # start; the overlay opens in your browser
 ```
@@ -144,6 +144,11 @@ The overlay is a normal browser tab, so use whatever keeps a window on top:
 along the bottom of the screen. Keys: `space` pause, `c` compact, `o` show the original text
 (dual mode), `+`/`-` font size. The toolbar's *copy* button copies the whole transcript.
 
+The toolbar also carries an **input meter**. If it stays dark while someone is speaking, the app is
+capturing the wrong device: that is the single most common setup mistake, and the terminal says so
+after twenty seconds of digital silence. A dropped connection shows as a yellow "reconnecting" band,
+visible in compact mode too.
+
 ### Pushing captions into Zoom itself (optional)
 
 Zoom's *third-party closed captioning* feature accepts captions from any program and shows them to
@@ -163,9 +168,11 @@ every participant behind the normal **Show Captions** button. It is free; the **
    ```
 
 Only *final* captions are pushed, at most one request per 0.8 s (each post replaces the caption
-line; Zoom shows two lines). Participants have to click *Show Captions*. The token only works for
-that meeting; `zoomlt check` hides it and nothing logs it. `config.toml` and `*.jsonl` transcripts
-are git-ignored for the same reason.
+line; Zoom shows two lines). Participants have to click *Show Captions*. Zoom counts captions with a
+sequence number and drops anything out of order, so the counter is remembered per meeting and
+continues if you restart the app mid-meeting. The token only works for that meeting; `zoomlt check`
+hides it, nothing logs it, and only a hash of it is written to disk. `config.toml` and `*.jsonl`
+transcripts are git-ignored for the same reason.
 
 Why not Zoom's own translated captions? They need a Business Plus / Enterprise plan or the paid
 Translated Captions add-on. Zoom's Meeting SDK raw-audio access needs a Marketplace app and, since
@@ -294,6 +301,13 @@ ZOOMLT_INTEGRATION=1 pytest tests/test_integration_nemotron.py   # downloads Nem
 Audio never leaves the machine. The only network calls are one-time model downloads (Hugging Face,
 GitHub releases for the Nemotron archive, argos-net.com for Argos packs) and, only if you enable it,
 the caption POSTs to Zoom's own servers.
+
+## Further reading
+
+* [`docs/zoom-platform.md`](docs/zoom-platform.md) — which Zoom integration route this app uses and
+  why the Meeting SDK, Realtime Media Streams and Zoom's own translated captions were rejected.
+* [`docs/models.md`](docs/models.md) — the measurements behind the engine and translation-model
+  choices, including the rejected alternatives.
 
 ## Licence
 

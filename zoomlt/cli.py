@@ -122,7 +122,7 @@ def cmd_download(args: argparse.Namespace) -> int:
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    """Print what would run, plus a quick environment sanity check."""
+    """Print what would run, plus the checks that otherwise only fail once a meeting has started."""
     cfg = build_config(args)
     import platform
 
@@ -133,13 +133,62 @@ def cmd_check(args: argparse.Namespace) -> int:
     print(json.dumps(shown, indent=2))
     ok = True
     for mod, why in [("faster_whisper", "speech recognition"), ("onnxruntime", "voice activity detection"),
-                     ("websockets", "overlay"), ("sounddevice", "audio capture")]:
+                     ("websockets", "overlay"), ("sounddevice", "audio capture"),
+                     ("ctranslate2", "translation runtime"), ("sentencepiece", "translation tokenizer")]:
         try:
             __import__(mod)
             print(f"  ok   {mod:16s} {why}")
         except Exception as exc:
             ok = False
             print(f"  MISSING {mod:13s} {why}: {exc}")
+    if cfg.asr.engine == "nemotron":
+        try:
+            __import__("sherpa_onnx")
+            print("  ok   sherpa_onnx      Nemotron 3.5 recogniser")
+        except Exception as exc:
+            ok = False
+            print(f"  MISSING sherpa_onnx    needed by --engine nemotron: {exc}")
+    # The three configuration mistakes that otherwise only show up mid-meeting.
+    try:
+        from zoomlt.vad import default_model_path
+
+        print(f"  ok   Silero VAD model  {default_model_path()}")
+    except Exception as exc:
+        ok = False
+        print(f"  PROBLEM Silero VAD model: {exc}\n         try: pip install -U 'faster-whisper>=1.2.1'")
+    from zoomlt.asr import is_transcribe_only
+
+    if cfg.asr.engine == "whisper" and cfg.asr.mode == "translate" and is_transcribe_only(cfg.asr.model):
+        ok = False
+        print(f"  PROBLEM asr.model '{cfg.asr.model}' cannot translate; use small/medium/large-v3, or mode 'dual'")
+    if cfg.asr.mode == "dual":
+        from zoomlt.mt import CONVERT_SUGGESTIONS, Ct2Translator
+
+        for code in cfg.asr.languages or ["es", "hi"]:
+            if code == cfg.mt.target:
+                continue
+            try:
+                cached = Ct2Translator(cfg.mt, install_languages=[]).resolve(code)
+            except Exception as exc:
+                cached, _ = None, exc
+            if cached:
+                print(f"  ok   translation {code}->{cfg.mt.target}: {cached}")
+            else:
+                from zoomlt.mt import DEFAULT_HF_REPOS
+
+                hint = None if code in DEFAULT_HF_REPOS else CONVERT_SUGGESTIONS.get(code)
+                print(f"  note translation {code}->{cfg.mt.target} not downloaded yet; `zoomlt download` fetches it"
+                      + (f" (for the best quality: zoomlt convert-mt {hint} --lang {code})" if hint else ""))
+    if cfg.audio.backend != "file":
+        try:
+            from zoomlt.audio.capture import list_devices, looks_like_loopback
+
+            rows = [r for r in list_devices() if "error" not in r]
+            if not any(looks_like_loopback(r["name"]) for r in rows):
+                print("  note no loopback/monitor capture device found: Zoom's audio cannot be captured yet. "
+                      "See README 'Routing Zoom audio'.")
+        except Exception as exc:
+            print(f"  note could not enumerate devices: {exc}")
     if sys.platform.startswith("win"):
         try:
             __import__("pyaudiowpatch")
@@ -163,7 +212,8 @@ def _run_pipeline(cfg: Config) -> int:
     from zoomlt.pipeline import Caption, Pipeline, PipelineStats
     from zoomlt.server import CaptionServer
 
-    for noisy in ("faster_whisper", "httpx", "huggingface_hub", "websockets", "websockets.server", "urllib3"):
+    for noisy in ("faster_whisper", "httpx", "httpcore", "huggingface_hub", "websockets", "websockets.server",
+                  "urllib3", "argostranslate", "stanza", "filelock"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     source = open_source(cfg.audio)
     log.info("audio source: %s", source.describe())
@@ -186,6 +236,15 @@ def _run_pipeline(cfg: Config) -> int:
             source.stop()
             return 2
 
+    languages = cfg.asr.languages or ["es", "hi"]
+    try:
+        # Built first: a missing translation dependency must not surface after a 470 MB download.
+        translator = build_translator(cfg.mt, install_languages=languages) if cfg.asr.mode == "dual" else NoopTranslator()
+    except Exception as exc:
+        log.error("could not start the translator: %s", exc)
+        source.stop()
+        return 2
+
     log.info("loading %s (first run downloads the model)...",
              f"Whisper '{cfg.asr.model}'" if cfg.asr.engine == "whisper" else "Nemotron 3.5 ASR")
     try:
@@ -195,8 +254,6 @@ def _run_pipeline(cfg: Config) -> int:
         log.error("could not start the recogniser: %s", exc)
         source.stop()
         return 2
-    languages = cfg.asr.languages or ["es", "hi"]
-    translator = build_translator(cfg.mt, install_languages=languages) if cfg.asr.mode == "dual" else NoopTranslator()
     if cfg.asr.mode == "dual":
         ready = translator.prepare([l for l in languages if l != cfg.mt.target])
         for lang, ok in ready.items():
@@ -213,7 +270,7 @@ def _run_pipeline(cfg: Config) -> int:
         log.info("tip: for Spanish/Hindi, `--engine nemotron` is markedly more accurate and faster on CPU")
     app_config = {
         "mode": cfg.asr.mode, "engine": engine.name, "model": cfg.asr.model if cfg.asr.engine == "whisper" else "nemotron-3.5",
-        "languages": cfg.asr.languages,
+        "languages": cfg.asr.languages, "zoom_cc": bool(pusher),
         "partials": cfg.asr.partial_interval_ms > 0, "source": source.describe(), "version": __version__,
     }
     server = CaptionServer(cfg.server, app_config)

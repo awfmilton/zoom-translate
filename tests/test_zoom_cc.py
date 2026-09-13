@@ -40,7 +40,7 @@ def test_pusher_sends_in_order_with_increasing_seq_and_coalesces():
         first_sent.set()
         return FakeResponse()
 
-    cfg = ZoomCcConfig(api_token_url=TOKEN, min_interval_ms=200)
+    cfg = ZoomCcConfig(api_token_url=TOKEN, min_interval_ms=200, resume_sequence=False)
     p = ZoomCaptionPusher(cfg, opener=opener).start()
     p.push("first  caption")
     assert first_sent.wait(5)  # the worker sends it alone...
@@ -62,7 +62,7 @@ def test_pusher_counts_failures_and_keeps_going():
         calls["n"] += 1
         raise OSError("boom")
 
-    cfg = ZoomCcConfig(api_token_url=TOKEN, min_interval_ms=10)
+    cfg = ZoomCcConfig(api_token_url=TOKEN, min_interval_ms=10, resume_sequence=False)
     p = ZoomCaptionPusher(cfg, opener=opener).start()
     p.push("a")
     p.stop()
@@ -97,7 +97,34 @@ def test_http_error_status_counts_as_failure():
     class Bad(FakeResponse):
         status = 500
 
-    p = ZoomCaptionPusher(ZoomCcConfig(api_token_url=TOKEN, min_interval_ms=10), opener=lambda req, timeout: Bad()).start()
+    p = ZoomCaptionPusher(ZoomCcConfig(api_token_url=TOKEN, min_interval_ms=10, resume_sequence=False),
+                          opener=lambda req, timeout: Bad()).start()
     p.push("x")
     p.stop()
     assert p.failed == 1 and p.sent == 0 and p.seq == 0
+
+
+def test_sequence_continues_after_a_restart(tmp_path):
+    """Zoom drops captions whose seq does not follow the last one it accepted."""
+    store = tmp_path / "seq.json"
+    seqs = []
+
+    def opener(req, timeout):
+        seqs.append(int(dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(req.full_url).query))["seq"]))
+        return FakeResponse()
+
+    cfg = ZoomCcConfig(api_token_url=TOKEN, min_interval_ms=10)
+    first = ZoomCaptionPusher(cfg, opener=opener, seq_store=store).start()
+    first.push("one")
+    first.stop()
+    second = ZoomCaptionPusher(cfg, opener=opener, seq_store=store).start()
+    second.push("two")
+    second.stop()
+    assert seqs == [1, 2]
+    assert TOKEN not in store.read_text()        # the token itself is never written to disk
+
+    other = ZoomCaptionPusher(ZoomCcConfig(api_token_url=TOKEN + "&x=2", min_interval_ms=10),
+                              opener=opener, seq_store=store).start()
+    other.push("different meeting")
+    other.stop()
+    assert seqs == [1, 2, 1]                     # a different token is a different meeting

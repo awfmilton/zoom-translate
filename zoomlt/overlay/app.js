@@ -8,6 +8,9 @@
   const dot = $("dot");
   const metaEl = $("meta");
   const lagEl = $("lag");
+  const meterEl = $("meter");
+  const meterFill = $("meter-fill");
+  const offlineEl = $("offline");
 
   const params = new URLSearchParams(location.search);
   const state = {
@@ -111,7 +114,18 @@
     if (state.config.mode) bits.push(state.config.mode);
     if (rtf) bits.push("rtf " + rtf.toFixed(2) + (rtf > 1 ? " (falling behind: use a smaller model)" : ""));
     if (s.backlog > 1) bits.push("backlog " + s.backlog);
+    if (s.shed) bits.push(s.shed + " skipped");
+    if (s.audio_overflows) bits.push(s.audio_overflows + " audio drops");
     metaEl.textContent = bits.join(" · ");
+    // Input meter: it is the difference between "nobody is talking" and "the wrong device".
+    if (typeof s.input_level === "number") {
+      const pct = Math.min(100, Math.round(Math.sqrt(s.input_level) * 140));
+      meterFill.style.width = pct + "%";
+      meterEl.classList.toggle("silent", s.input_level < 0.002);
+      meterEl.title = s.input_level < 0.002
+        ? "no sound reaching the app: check the capture device (zoomlt devices)"
+        : "input level";
+    }
   }
 
   // ---- message handling ----------------------------------------------------------------------
@@ -121,7 +135,11 @@
     if (msg.type === "hello") {
       state.config = msg.config || {};
       metaEl.textContent = [state.config.model, state.config.mode].filter(Boolean).join(" · ");
+      // "original" only means something when both texts exist (dual/transcribe modes).
+      $("btn-source").hidden = state.config.mode === "translate";
       captionsEl.innerHTML = "";
+      partialEl.textContent = "";
+      state.partialId = null;
       state.finals = [];
       (msg.history || []).forEach((c) => { state.finals.push(c); renderFinal(c); });
       captionsEl.querySelectorAll(".cap").forEach((el) => el.classList.remove("new"));
@@ -148,13 +166,14 @@
     const proto = location.protocol === "https:" ? "wss://" : "ws://";
     const token = params.get("t");
     ws = new WebSocket(proto + location.host + "/ws" + (token ? "?t=" + encodeURIComponent(token) : ""));
-    ws.onopen = () => { dot.className = "dot ok"; retry = 500; };
+    ws.onopen = () => { dot.className = "dot ok"; offlineEl.hidden = true; retry = 500; };
     ws.onmessage = (ev) => {
       let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
       handleMessage(msg);
     };
     ws.onclose = () => {
       dot.className = "dot";
+      offlineEl.hidden = false;        // visible even in compact mode, where the toolbar is hidden
       setTimeout(connect, retry);
       retry = Math.min(retry * 2, 5000);
     };
@@ -186,6 +205,7 @@
   };
   document.addEventListener("keydown", (e) => {
     if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;   // leave Ctrl+C, Cmd+-, browser zoom alone
     if (e.code === "Space") { e.preventDefault(); setPaused(!state.paused); }
     else if (e.key === "c") setCompact(!state.compact);
     else if (e.key === "o") setSource(!state.showSource);

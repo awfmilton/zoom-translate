@@ -141,6 +141,9 @@ class ZoomCcConfig:
     # Zoom rejects bursts; captions are coalesced and sent at most this often.
     min_interval_ms: int = 800
     timeout_s: float = 5.0
+    # Zoom drops a caption whose sequence number is not exactly one past the last it accepted, so
+    # the counter is remembered per meeting and continued if the app is restarted mid-meeting.
+    resume_sequence: bool = True
 
 
 @dataclass
@@ -208,6 +211,8 @@ class Config:
         if self.vad.max_utterance_s * 1000 <= floor_ms:
             raise ValueError(f"vad.max_utterance_s must exceed {floor_ms / 1000:.1f} s "
                              "(cut_search_ms + pre_roll_ms + min_speech_ms + 0.5 s)")
+        if isinstance(self.asr.languages, str):
+            raise ValueError('asr.languages is a list, e.g. languages = ["es", "hi"] (not a single string)')
         for code in self.asr.languages:
             if not (isinstance(code, str) and code.isalpha() and code.islower() and 2 <= len(code) <= 3):
                 raise ValueError(f"asr.languages entries are ISO 639-1 codes such as 'es' or 'hi', got {code!r}")
@@ -226,6 +231,9 @@ class Config:
                 raise ValueError(f"asr.engine = 'nemotron' supports es, hi, en only; {bad} need engine 'whisper'")
         if self.asr.mode == "dual" and self.mt.engine == "none":
             raise ValueError("asr.mode = 'dual' needs an MT engine (mt.engine = 'ct2' or 'argos')")
+        if self.zoom_cc.api_token_url and self.asr.mode == "transcribe":
+            raise ValueError("zoom_cc pushes English captions into Zoom, which asr.mode = 'transcribe' never produces; "
+                             "use mode 'translate' or 'dual'")
         if not (0 <= self.server.port <= 65535):  # 0 = let the OS pick (tests)
             raise ValueError("server.port out of range")
         if self.asr.partial_window_s < 0:

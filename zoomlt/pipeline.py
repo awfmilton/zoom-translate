@@ -12,12 +12,15 @@ therefore never fall further behind than "one utterance", however slow the CPU i
 from __future__ import annotations
 
 import collections
+import dataclasses
 import json
 import logging
 import threading
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Deque, List, Optional
+
+import numpy as np
 
 from zoomlt.asr import AsrEngine
 from zoomlt.audio.capture import AudioSource
@@ -71,6 +74,7 @@ class PipelineStats:
     shed: int = 0                    # finals discarded because the recogniser fell too far behind
     stale_partials_skipped: int = 0
     audio_overflows: int = 0         # capture-driver overruns (samples lost before the queue)
+    input_level: float = 0.0         # peak amplitude seen since the last status (0 = digital silence)
     started_at: float = field(default_factory=time.time)
 
     @property
@@ -165,11 +169,21 @@ class Pipeline:
         self._wall_start = time.monotonic()
         last_status = time.monotonic()
         dropped_accounted = 0.0
+        peak = 0.0
+        silent_since: Optional[float] = time.monotonic()
+        warned_silent = False
         try:
             with source:
                 for block in source.blocks():
                     if self._stop.is_set():
                         break
+                    if block.size:
+                        level = float(np.abs(block).max())
+                        peak = max(peak, level)
+                        if level > 0.002:
+                            silent_since, warned_silent = None, False
+                        elif silent_since is None:
+                            silent_since = time.monotonic()
                     dropped = source.dropped_seconds()
                     if dropped > dropped_accounted:
                         # keep the stream clock honest so lag_s stays meaningful after an overrun
@@ -179,12 +193,23 @@ class Pipeline:
                     for ev in self.segmenter.feed(block):
                         self._enqueue(ev)
                     now = time.monotonic()
+                    if (not warned_silent and silent_since is not None
+                            and now - silent_since > 20 and self.cfg.audio.backend != "file"):
+                        warned_silent = True
+                        log.warning("20 s of digital silence from '%s'. The captured device is probably not the one "
+                                    "Zoom plays into (macOS also needs Microphone permission for your terminal). "
+                                    "Run `zoomlt devices` and pass --device.", source.name)
                     if self.on_status and now - last_status >= self.status_interval_s:
                         last_status = now
                         self.stats.audio_overflows = getattr(source, "overflows", 0)
+                        self.stats.input_level = round(peak, 4)
+                        peak = 0.0
                         self._emit_status()
                 for ev in self.segmenter.flush():
                     self._enqueue(ev)
+                self.stats.audio_overflows = getattr(source, "overflows", 0)
+                self.stats.input_level = round(peak, 4)
+                self._emit_status()          # closing measurement, so the last peak is never lost
         finally:
             self._drain_and_stop()
 
@@ -231,7 +256,8 @@ class Pipeline:
     def _emit_status(self) -> None:
         if self.on_status:
             try:
-                self.on_status(self.stats)
+                # a snapshot: the live object keeps mutating, and a consumer may keep the value
+                self.on_status(dataclasses.replace(self.stats))
             except Exception:  # pragma: no cover
                 log.exception("status callback failed")
 

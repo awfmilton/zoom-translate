@@ -13,6 +13,7 @@
     <span id="title">zoomlt</span>
     <span id="meta"></span>
     <span id="lag" title="seconds between the end of speech and the caption"></span>
+    <span id="meter" title="input level"><span id="meter-fill"></span></span>
     <span class="spacer"></span>
     <button id="btn-source" title="show the original-language text too (dual/transcribe modes)">original</button>
     <button id="btn-smaller" title="smaller text">A-</button>
@@ -22,6 +23,7 @@
     <button id="btn-copy" title="copy the whole transcript">copy</button>
     <button id="btn-clear" title="clear the screen">clear</button>
   </header>
+  <div id="offline" hidden>reconnecting to zoomlt…</div>
   <main id="captions" aria-live="polite"></main>
   <div id="partial" class="partial"></div>
   <div id="hint" class="hint">Waiting for speech. Keep this window on top of Zoom (Windows: PowerToys "Always on top", Win+Ctrl+T; macOS: use a small browser window next to Zoom).</div>

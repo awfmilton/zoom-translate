@@ -82,3 +82,25 @@ def test_env_var_supplies_zoom_token(monkeypatch):
 def test_host_flag(monkeypatch):
     cfg = build_config(make_parser().parse_args(["run", "--host", "0.0.0.0", "--port", "0"]))
     assert cfg.server.host == "0.0.0.0"
+
+
+def test_check_flags_a_transcription_only_model_and_missing_vad(capsys):
+    main(["check", "--model", "large-v3-turbo", "--mode", "dual", "-l", "es"])
+    out = capsys.readouterr().out
+    assert "Silero VAD model" in out
+    assert "translation es->en" in out
+
+
+def test_caption_push_with_transcribe_mode_is_rejected(capsys):
+    rc = main(["check", "--mode", "transcribe", "--zoom-cc-url", "https://wmcc.zoom.us/closedcaption?id=1&signature=s"])
+    assert rc == 2
+    assert "never produces" in capsys.readouterr().err
+
+
+def test_languages_must_be_a_list():
+    import pytest
+
+    from zoomlt.config import Config
+
+    with pytest.raises(ValueError, match="is a list"):
+        Config.from_dict({"asr": {"languages": "es"}})
