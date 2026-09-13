@@ -11,6 +11,7 @@ without a model download.
 
 from __future__ import annotations
 
+import collections
 import logging
 import threading
 import time
@@ -45,6 +46,9 @@ class AsrEngine:
     name = "abstract"
     #: True when the engine can emit English directly (Whisper's translate task).
     can_translate = False
+    #: True when the engine keeps per-utterance state and only processes new audio (Nemotron).
+    #: Non-streaming engines get their partial decodes capped to a trailing window.
+    streaming = False
 
     def transcribe(self, audio: np.ndarray, task: str, is_partial: bool = False,
                    utterance_id: Optional[int] = None) -> AsrResult:  # pragma: no cover
@@ -111,14 +115,32 @@ class FasterWhisperEngine(AsrEngine):
         self._lock = threading.Lock()   # CTranslate2 is thread-safe, but one decode at a time keeps latency predictable
         self.allowed = [l.strip().lower() for l in cfg.languages if l and l.strip()]
         self.fixed_language = self.allowed[0] if len(self.allowed) == 1 else None
+        self._lang_cache: "collections.OrderedDict[int, tuple]" = collections.OrderedDict()
+        self._last_language: Optional[tuple] = None
 
     # -- language -------------------------------------------------------------------------------
 
-    def _choose_language(self, audio: np.ndarray) -> tuple[Optional[str], float]:
+    def _choose_language(self, audio: np.ndarray, is_partial: bool = False,
+                         utterance_id: Optional[int] = None) -> tuple[Optional[str], float]:
+        """Language for this decode. Detection is a full encoder pass, so it runs at most once per
+        utterance (cached by id) and not at all on a very short partial."""
         if self.fixed_language:
             return self.fixed_language, 1.0
         if not self.allowed:
-            return None, 0.0           # Whisper detects on its own
+            return None, 0.0           # Whisper detects on its own, inside transcribe()
+        if utterance_id is not None and utterance_id in self._lang_cache:
+            return self._lang_cache[utterance_id]
+        if is_partial and audio.shape[0] < 2 * 16000 and self._last_language:
+            return self._last_language   # too little audio to judge; keep the previous speaker's language
+        choice = self._detect_restricted(audio)
+        self._last_language = choice
+        if utterance_id is not None:
+            self._lang_cache[utterance_id] = choice
+            while len(self._lang_cache) > 16:
+                self._lang_cache.popitem(last=False)
+        return choice
+
+    def _detect_restricted(self, audio: np.ndarray) -> tuple[Optional[str], float]:
         lang, prob, all_probs = self.model.detect_language(audio=audio)
         if lang in self.allowed:
             return lang, prob
@@ -137,7 +159,7 @@ class FasterWhisperEngine(AsrEngine):
         t0 = time.monotonic()
         duration = audio.shape[0] / 16000.0
         with self._lock:
-            language, lang_prob = self._choose_language(audio)
+            language, lang_prob = self._choose_language(audio, is_partial, utterance_id)
             segments, info = self.model.transcribe(
                 audio,
                 language=language,

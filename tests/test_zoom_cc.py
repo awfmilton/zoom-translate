@@ -30,19 +30,22 @@ class FakeResponse(io.BytesIO):
 
 
 def test_pusher_sends_in_order_with_increasing_seq_and_coalesces():
+    import threading
+
     sent = []
+    first_sent = threading.Event()
 
     def opener(req, timeout):
         sent.append((req.full_url, req.data.decode("utf-8"), req.get_header("Content-type")))
+        first_sent.set()
         return FakeResponse()
 
     cfg = ZoomCcConfig(api_token_url=TOKEN, min_interval_ms=200)
     p = ZoomCaptionPusher(cfg, opener=opener).start()
     p.push("first  caption")
-    time.sleep(0.1)            # the worker sends it alone...
+    assert first_sent.wait(5)  # the worker sends it alone...
     p.push("second")
     p.push("third")            # ...and these two wait out the interval, then go as one request
-    time.sleep(0.6)
     p.stop()
     assert p.sent == 2 and p.failed == 0
     seqs = [int(dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(u).query))["seq"]) for u, _, _ in sent]
@@ -62,11 +65,11 @@ def test_pusher_counts_failures_and_keeps_going():
     cfg = ZoomCcConfig(api_token_url=TOKEN, min_interval_ms=10)
     p = ZoomCaptionPusher(cfg, opener=opener).start()
     p.push("a")
-    time.sleep(0.1)
-    p.push("b")
-    time.sleep(0.1)
     p.stop()
-    assert p.failed == 2 and p.sent == 0 and calls["n"] == 2
+    p2 = ZoomCaptionPusher(cfg, opener=opener).start()
+    p2.push("b")
+    p2.stop()
+    assert p.failed == 1 and p2.failed == 1 and p.sent == 0 and calls["n"] == 2
     assert p.seq == 0                      # failed posts do not consume sequence numbers
 
 
@@ -88,3 +91,13 @@ def test_stop_sends_queued_captions_before_exiting():
     p.push("three")
     p.stop()
     assert " ".join(sent).split() == ["one", "two", "three"]
+
+
+def test_http_error_status_counts_as_failure():
+    class Bad(FakeResponse):
+        status = 500
+
+    p = ZoomCaptionPusher(ZoomCcConfig(api_token_url=TOKEN, min_interval_ms=10), opener=lambda req, timeout: Bad()).start()
+    p.push("x")
+    p.stop()
+    assert p.failed == 1 and p.sent == 0 and p.seq == 0

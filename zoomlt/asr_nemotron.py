@@ -126,6 +126,7 @@ def guess_language(text: str, allowed: Sequence[str]) -> Optional[str]:
 class NemotronEngine(AsrEngine):
     name = "nemotron"
     can_translate = False
+    streaming = True
 
     def __init__(self, cfg: AsrConfig):
         try:

@@ -113,3 +113,13 @@ def test_safe_extract_refuses_traversal(tmp_path):
         tar.addfile(info)
     with tarfile.open(archive) as tar, pytest.raises(RuntimeError, match="refusing"):
         _safe_extract(tar, tmp_path / "out")
+
+
+def test_ct2_does_not_download_for_unconfigured_languages(tmp_path, monkeypatch):
+    tr = Ct2Translator(MtConfig(engine="ct2", auto_install=True), cache_dir=tmp_path, install_languages=["es"])
+    calls = []
+    monkeypatch.setattr(tr, "_fetch_hf", lambda repo, dest: calls.append(("hf", repo)))
+    monkeypatch.setattr(tr, "_fetch_argos", lambda src, dest: calls.append(("argos", src)))
+    assert tr.resolve("hi") is None and calls == []
+    tr.resolve("es")
+    assert calls and calls[0][0] == "hf"

@@ -29,6 +29,7 @@ mode = "translate"        # translate = English only | transcribe = original onl
 languages = []            # e.g. ["es", "hi"] — restricts language detection to what your team speaks
 beam_size = 1             # 1 is fastest; 3-5 is a little more accurate on a fast machine
 partial_interval_ms = 1200  # 0 disables in-progress captions (halves CPU work)
+partial_window_s = 8.0      # Whisper partials only re-read the last N seconds (finals read everything)
 # hotwords = "Priya, Kubernetes, Acme"     # names/terms Whisper should spell right
 # initial_prompt = "A software startup team meeting."
 
@@ -39,7 +40,7 @@ beam_size = 2
 # model_dirs = { hi = "/path/to/your/ctranslate2/model" }   # your own converted OPUS-MT model
 
 [server]
-host = "127.0.0.1"
+host = "127.0.0.1"        # 0.0.0.0 shares the overlay on your LAN (per-run token in the URL, no encryption)
 port = 8765
 open_browser = true
 history = 200
@@ -47,6 +48,7 @@ history = 200
 
 [zoom_cc]
 # Paste the meeting's caption API token URL to push English captions into Zoom for everyone.
+# (Or set the ZOOMLT_ZOOM_CC_URL environment variable. Keep config.toml out of git: it is a secret.)
 # api_token_url = "https://wmcc.zoom.us/closedcaption?id=...&ns=...&expire=...&sparams=...&signature=..."
 lang = "en-US"
 min_interval_ms = 800

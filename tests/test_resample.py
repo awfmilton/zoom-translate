@@ -34,9 +34,11 @@ def test_numpy_fallback_ratio_and_continuity():
 
 
 def test_pyav_path_if_available():
+    import pytest
+
+    pytest.importorskip("av")
     r = Resampler(44100)
-    if r._av is None:
-        return  # PyAV missing; covered by the numpy test
+    assert r._av is not None
     src = _sine(44100, 0.5)
     out = np.concatenate([r.process(chunk) for chunk in np.array_split(src, 11)])
     assert abs(out.shape[0] - 8000) <= 200

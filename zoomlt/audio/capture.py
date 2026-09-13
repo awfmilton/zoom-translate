@@ -54,19 +54,33 @@ class AudioSource:
         self._queue: "queue.Queue[Optional[np.ndarray]]" = queue.Queue()
         self._dropped = 0
         self._stopped = threading.Event()
+        self._started = False
+        self.overflows = 0            # driver-side overruns (audio lost before it reached us)
 
     # -- lifecycle -----------------------------------------------------------------------------
 
     def start(self) -> None:  # pragma: no cover - abstract
         raise NotImplementedError
 
+    def ensure_started(self) -> None:
+        """Open the device once. Called early by the CLI so a bad device fails before models load."""
+        if not self._started:
+            self.start()
+            self._started = True
+
     def stop(self) -> None:
         self._stopped.set()
         self._queue.put(None)
 
     def __enter__(self) -> "AudioSource":
-        self.start()
+        self.ensure_started()
         return self
+
+    def _note_overflow(self) -> None:
+        self.overflows += 1
+        if self.overflows in (1, 10) or self.overflows % 100 == 0:
+            log.warning("audio input overflow (%d so far): the CPU is too busy to keep up with capture; "
+                        "captions may be choppy. Try a smaller model or --no-partials.", self.overflows)
 
     def __exit__(self, *exc) -> None:
         self.stop()
@@ -127,6 +141,26 @@ class AudioSource:
 # sounddevice (PortAudio)
 # ---------------------------------------------------------------------------------------------
 
+LOOPBACK_HINTS = ("loopback", "monitor", "blackhole", "cable", "stereo mix", "what u hear", "virtual",
+                  "soundflower", "loop", "parec:")
+
+
+def looks_like_loopback(name: str) -> bool:
+    n = (name or "").lower()
+    return any(h in n for h in LOOPBACK_HINTS)
+
+
+def _import_sounddevice():
+    try:
+        import sounddevice as sd
+    except (OSError, ImportError) as exc:
+        raise RuntimeError(
+            "sounddevice could not load PortAudio. Linux: `sudo apt install libportaudio2` "
+            "(Fedora: `sudo dnf install portaudio`), or use --backend parec. Detail: " + str(exc)
+        ) from exc
+    return sd
+
+
 def _match_device(devices, wanted: Optional[str], want_input: bool = True) -> Optional[int]:
     """Resolve a device index from an int, a numeric string or a case-insensitive name substring."""
     if wanted is None or wanted == "":
@@ -145,8 +179,7 @@ def _match_device(devices, wanted: Optional[str], want_input: bool = True) -> Op
 class SounddeviceSource(AudioSource):
     def __init__(self, device: Optional[str] = None, block_ms: int = 32):
         super().__init__(block_ms)
-        import sounddevice as sd
-
+        sd = _import_sounddevice()
         self._sd = sd
         devices = sd.query_devices()
         idx = _match_device(devices, device)
@@ -169,7 +202,10 @@ class SounddeviceSource(AudioSource):
 
         def callback(indata, frames, time_info, status):
             if status:
-                log.debug("sounddevice status: %s", status)
+                if status.input_overflow:
+                    self._note_overflow()
+                else:
+                    log.debug("sounddevice status: %s", status)
             self._push(np.array(indata, dtype=np.float32, copy=True))
 
         self._stream = sd.InputStream(
@@ -222,7 +258,14 @@ class WasapiLoopbackSource(AudioSource):
             raise RuntimeError("no WASAPI loopback devices found")
         if device is not None and str(device).strip() != "":
             if str(device).strip().isdigit():
-                return pa.get_device_info_by_index(int(device))
+                info = pa.get_device_info_by_index(int(device))
+                if info.get("isLoopbackDevice"):
+                    return info
+                try:                       # an output device: use its loopback twin
+                    return pa.get_wasapi_loopback_analogue_by_index(int(device))
+                except Exception as exc:
+                    raise ValueError(f"device {device} is not a WASAPI loopback device; run `zoomlt devices` "
+                                     "and pass part of a name marked loopback") from exc
             needle = str(device).lower()
             for lb in loopbacks:
                 if needle in str(lb["name"]).lower():
@@ -241,6 +284,8 @@ class WasapiLoopbackSource(AudioSource):
         frames = int(self.native_rate * self.block_ms / 1000)
 
         def callback(in_data, frame_count, time_info, status):
+            if status and (status & pyaudio.paInputOverflow):
+                self._note_overflow()
             raw = np.frombuffer(in_data, dtype=np.float32).reshape(-1, self.channels)
             self._push(raw.copy())
             return (None, pyaudio.paContinue)
@@ -430,8 +475,7 @@ def list_devices() -> list[dict]:
     """Enumerate capture candidates across backends (for `zoomlt devices`)."""
     out: list[dict] = []
     try:
-        import sounddevice as sd
-
+        sd = _import_sounddevice()
         apis = sd.query_hostapis()
         for idx, dev in enumerate(sd.query_devices()):
             if dev.get("max_input_channels", 0) <= 0:
@@ -443,7 +487,7 @@ def list_devices() -> list[dict]:
                 "hostapi": apis[dev["hostapi"]]["name"] if apis else "?",
                 "channels": dev["max_input_channels"],
                 "rate": int(round(dev["default_samplerate"])),
-                "loopback": "monitor" in str(dev["name"]).lower() or "loopback" in str(dev["name"]).lower(),
+                "loopback": looks_like_loopback(str(dev["name"])),
             })
     except Exception as exc:  # PortAudio missing, etc.
         out.append({"backend": "sounddevice", "error": str(exc)})

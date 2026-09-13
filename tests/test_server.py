@@ -76,3 +76,72 @@ def test_bind_failure_is_reported_not_swallowed(server):
     clash.start_in_thread()
     assert clash.wait_ready(10) is False
     assert clash.error is not None
+
+
+def test_host_and_origin_checks(server):
+    import http.client
+
+    def get(headers):
+        c = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        c.request("GET", "/", headers=headers)
+        r = c.getresponse()
+        r.read()
+        c.close()
+        return r.status
+
+    assert get({"Host": f"127.0.0.1:{server.port}"}) == 200
+    assert get({"Host": f"localhost:{server.port}"}) == 200
+    assert get({"Host": "evil.example.com"}) == 403                       # DNS rebinding
+    assert get({"Host": f"127.0.0.1:{server.port}", "Origin": f"http://127.0.0.1:{server.port}"}) == 200
+    assert get({"Host": f"127.0.0.1:{server.port}", "Origin": "http://attacker.test"}) == 403
+    assert get({"Host": f"127.0.0.1:{server.port}"}) == 200
+
+
+def test_websocket_refuses_foreign_origin(server):
+    import asyncio
+
+    async def attempt():
+        from websockets.asyncio.client import connect
+        from websockets.exceptions import InvalidStatus
+
+        try:
+            async with connect(f"ws://127.0.0.1:{server.port}/ws", origin="http://attacker.test") as ws:
+                await ws.recv()
+        except InvalidStatus as exc:
+            return exc.response.status_code
+        return 101
+
+    assert asyncio.run(attempt()) == 403
+
+
+def test_lan_mode_requires_token():
+    import urllib.error
+    import urllib.request
+
+    lan = CaptionServer(ServerConfig(host="0.0.0.0", port=0, open_browser=False))
+    lan.start_in_thread()
+    assert lan.wait_ready(10) and lan.token
+    try:
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{lan.port}/", timeout=5)
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 403
+        else:
+            raise AssertionError("token should be required")
+        with urllib.request.urlopen(lan.url(), timeout=5) as r:
+            assert r.status == 200 and b"zoomlt" in r.read()
+        assert "?t=" in lan.url() and lan.url().startswith("http://127.0.0.1:")
+    finally:
+        lan.shutdown()
+
+
+def test_static_handler_survives_hostile_paths(server):
+    import http.client
+
+    for path in ["/%00", "/" + "a" * 300, "/..%5c..%5cpyproject.toml", "/%2e%2e%2fpyproject.toml"]:
+        c = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+        c.request("GET", path, headers={"Host": f"127.0.0.1:{server.port}"})
+        r = c.getresponse()
+        r.read()
+        c.close()
+        assert r.status == 404, path

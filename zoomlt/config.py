@@ -85,8 +85,12 @@ class AsrConfig:
     hotwords: str | None = None
     initial_prompt: str | None = None
     # Partial captions: re-decode the in-progress utterance every N ms so words show up while the
-    # person is still talking. 0 disables partials (only finals; halves CPU load).
+    # person is still talking. 0 disables partials (only finals; halves CPU load). The pipeline
+    # stretches the interval automatically when a partial decode takes longer than this.
     partial_interval_ms: int = 1200
+    # Whisper re-reads the whole utterance for every partial; cap that at the trailing N seconds
+    # (the final still decodes everything). 0 = no cap. Ignored by the streaming Nemotron engine.
+    partial_window_s: float = 8.0
     # Hallucination guards (Whisper invents text on silence / music / noise).
     no_speech_threshold: float = 0.6
     log_prob_threshold: float = -1.0
@@ -224,6 +228,16 @@ class Config:
             raise ValueError("asr.mode = 'dual' needs an MT engine (mt.engine = 'ct2' or 'argos')")
         if not (0 <= self.server.port <= 65535):  # 0 = let the OS pick (tests)
             raise ValueError("server.port out of range")
+        if self.asr.partial_window_s < 0:
+            raise ValueError("asr.partial_window_s must be >= 0")
+        url = self.zoom_cc.api_token_url
+        if url:
+            import urllib.parse
+
+            parts = urllib.parse.urlsplit(str(url))
+            if parts.scheme != "https" or not parts.netloc or not parts.query:
+                # never echo the value: it is a meeting secret
+                raise ValueError("zoom_cc.api_token_url must be the https:// URL copied from Zoom's caption menu (value not shown)")
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)

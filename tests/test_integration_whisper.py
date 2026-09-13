@@ -22,8 +22,9 @@ def test_whisper_translates_spanish_clip(integration, es_audio):
 
 def test_language_restriction_picks_from_allowed_set(integration, hi_audio):
     eng = FasterWhisperEngine(AsrConfig(model=MODEL, device="cpu", compute_type="int8", languages=["es", "hi"]))
-    res = eng.transcribe(hi_audio, task="transcribe")
-    assert res.language in ("es", "hi")
+    res = eng.transcribe(hi_audio, task="transcribe", utterance_id=7)
+    assert res.language == "hi"
+    assert eng._lang_cache[7][0] == "hi"          # detection ran once and was cached for the utterance
 
 
 def test_silence_yields_nothing(integration):

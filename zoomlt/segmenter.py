@@ -162,7 +162,10 @@ class Segmenter:
             self._since_partial = 0
             return events
 
-        if self.partial_interval_frames and self._since_partial >= self.partial_interval_frames:
+        # No partial while the end-of-utterance silence countdown is running: the final is about
+        # to follow, and a partial decode of the same audio would only delay it.
+        if (self.partial_interval_frames and self._since_partial >= self.partial_interval_frames
+                and self._silence_run == 0):
             if self._speech_frames >= self.min_speech_frames:
                 events.append(self._event("partial", self._frames, self._start_frame))
             self._since_partial = 0

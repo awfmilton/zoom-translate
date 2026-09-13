@@ -87,6 +87,10 @@ class Translator:
     def supports(self, source_lang: Optional[str]) -> bool:  # pragma: no cover
         return False
 
+    def prepare(self, languages: List[str]) -> Dict[str, bool]:
+        """Resolve (download/load) the models for these languages up front, before the meeting."""
+        return {lang: self.supports(lang) for lang in languages}
+
 
 class NoopTranslator(Translator):
     name = "none"
@@ -138,7 +142,8 @@ class _Ct2Model:
 class Ct2Translator(Translator):
     name = "ct2"
 
-    def __init__(self, cfg: MtConfig, cache_dir: Optional[Path] = None, threads: int = 0):
+    def __init__(self, cfg: MtConfig, cache_dir: Optional[Path] = None, threads: int = 0,
+                 install_languages: Optional[List[str]] = None):
         try:
             import ctranslate2  # noqa: F401
             import sentencepiece  # noqa: F401
@@ -147,6 +152,9 @@ class Ct2Translator(Translator):
         self.cfg = cfg
         self.cache_dir = cache_dir or default_cache_dir() / "mt"
         self.threads = threads
+        # Downloads happen only for these languages (None = any). The CLI passes the configured
+        # languages so a mis-detected language can never trigger a download mid-meeting.
+        self.install_languages: Optional[set] = set(install_languages) if install_languages is not None else None
         self._lock = threading.Lock()
         self._models: Dict[str, _Ct2Model] = {}
         self._missing: set = set()
@@ -169,6 +177,8 @@ class Ct2Translator(Translator):
         if detect_layout(cached):
             return cached
         if not self.cfg.auto_install:
+            return None
+        if self.install_languages is not None and src not in self.install_languages:
             return None
         repo = (self.cfg.hf_repos or {}).get(src) or (DEFAULT_HF_REPOS.get(src) if src not in ARGOS_PREFERRED else None)
         if repo:
@@ -415,11 +425,11 @@ class FakeTranslator(Translator):
         return f"[{source_lang}->en] {text}"
 
 
-def build_translator(cfg: MtConfig) -> Translator:
+def build_translator(cfg: MtConfig, install_languages: Optional[List[str]] = None) -> Translator:
     if cfg.engine == "none":
         return NoopTranslator()
     if cfg.engine == "ct2":
-        return Ct2Translator(cfg)
+        return Ct2Translator(cfg, install_languages=install_languages)
     if cfg.engine == "argos":
         return ArgosTranslator(cfg)
     if cfg.engine == "fake":

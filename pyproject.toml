@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
-  "faster-whisper>=1.1,<2",   # Whisper on CTranslate2 (CPU int8 or GPU); bundles PyAV and the Silero VAD ONNX model
+  "faster-whisper>=1.2.1,<2", # Whisper on CTranslate2 (CPU int8 or GPU); 1.2.1+ bundles the single-file Silero VAD v6 ONNX model
   "ctranslate2>=4.4,<5",      # also runs the OPUS-MT / Argos translation models
   "sentencepiece>=0.2",       # tokenizer for those translation models
   "sherpa-onnx>=1.13.5",      # NVIDIA Nemotron 3.5 streaming ASR (the accurate Spanish/Hindi option)

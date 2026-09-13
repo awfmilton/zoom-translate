@@ -146,7 +146,8 @@
   let ws = null, retry = 500;
   function connect() {
     const proto = location.protocol === "https:" ? "wss://" : "ws://";
-    ws = new WebSocket(proto + location.host + "/ws");
+    const token = params.get("t");
+    ws = new WebSocket(proto + location.host + "/ws" + (token ? "?t=" + encodeURIComponent(token) : ""));
     ws.onopen = () => { dot.className = "dot ok"; retry = 500; };
     ws.onmessage = (ev) => {
       let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }

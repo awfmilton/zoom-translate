@@ -138,3 +138,14 @@ def test_skip_closes_utterance_and_advances_clock():
     assert len(events) == 1 and events[0].reason == "gap"
     assert abs(seg.stream_time_s - (10 * FRAME_MS / 1000 + 2.0)) < 0.04
     assert not seg.in_speech
+
+
+def test_no_partial_during_end_of_utterance_countdown():
+    # 12 speech frames then 4 low frames (countdown of 5 not yet reached) then more speech
+    probs = [0.9] * 12 + [0.1] * 4 + [0.9] * 10 + [0.0] * 10
+    seg = Segmenter(ScriptedVad(probs), cfg(pre_roll_ms=0), partial_interval_ms=FRAME_MS * 13)
+    events = run(seg, 40, block_frames=1)
+    kinds = [(e.kind, e.audio.shape[0] // FRAME_SAMPLES) for e in events]
+    # the partial due at frame 13 (inside the low run) is deferred until speech resumes
+    assert kinds[0][0] == "partial" and kinds[0][1] >= 17
+    assert kinds[-1][0] == "final"

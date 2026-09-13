@@ -17,7 +17,9 @@ import http
 import json
 import logging
 import mimetypes
+import secrets
 import threading
+import urllib.parse
 from pathlib import Path
 from typing import Any, Deque, Optional, Set
 
@@ -31,6 +33,11 @@ log = logging.getLogger(__name__)
 
 OVERLAY_DIR = Path(__file__).parent / "overlay"
 WS_PATH = "/ws"
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+def is_loopback_host(host: str) -> bool:
+    return host in LOOPBACK_HOSTS or host.startswith("127.")
 
 
 class CaptionServer:
@@ -47,6 +54,9 @@ class CaptionServer:
         self.port: int = cfg.port
         self.last_status: Optional[dict] = None
         self.error: Optional[BaseException] = None
+        # Off loopback (LAN viewing) every request must carry a per-run token; the feed has no
+        # other authentication and the meeting transcript is sensitive.
+        self.token: Optional[str] = None if is_loopback_host(cfg.host) else secrets.token_urlsafe(12)
 
     # -- thread-safe entry points ---------------------------------------------------------------
 
@@ -108,8 +118,26 @@ class CaptionServer:
         finally:
             self.clients.discard(ws)
 
+    def url(self, host: Optional[str] = None) -> str:
+        host = host or ("127.0.0.1" if self.cfg.host in ("0.0.0.0", "", "::") else self.cfg.host)
+        base = f"http://{host}:{self.port}/"
+        return base + (f"?t={self.token}" if self.token else "")
+
     def _process_request(self, connection: ServerConnection, request: Request) -> Optional[Response]:
-        path = request.path.split("?", 1)[0]
+        path, _, query = request.path.partition("?")
+        params = dict(urllib.parse.parse_qsl(query))
+        host_header = request.headers.get("Host", "")
+        host_only = host_header.rsplit(":", 1)[0] if not host_header.startswith("[") else host_header.split("]")[0] + "]"
+        # DNS-rebinding guard: on loopback only loopback Host headers are served.
+        if self.token is None and not is_loopback_host(host_only):
+            return _text_response(http.HTTPStatus.FORBIDDEN, "forbidden")
+        if self.token is not None and not secrets.compare_digest(params.get("t", ""), self.token):
+            return _text_response(http.HTTPStatus.FORBIDDEN, "missing or wrong token; use the URL zoomlt printed")
+        origin = request.headers.get("Origin")
+        if origin:
+            # Browsers do not apply CORS to WebSocket handshakes: refuse other sites' pages.
+            if urllib.parse.urlsplit(origin).netloc != host_header:
+                return _text_response(http.HTTPStatus.FORBIDDEN, "cross-origin request refused")
         if path == WS_PATH:
             return None                      # proceed with the WebSocket handshake
         return self._static(path)
@@ -117,13 +145,15 @@ class CaptionServer:
     def _static(self, path: str) -> Response:
         if path in ("", "/"):
             path = "/index.html"
-        rel = path.lstrip("/")
-        target = (self.overlay_dir / rel).resolve()
-        try:
-            target.relative_to(self.overlay_dir.resolve())
-        except ValueError:
+        rel = urllib.parse.unquote(path.lstrip("/"))
+        if "\x00" in rel or len(rel) > 255 or "\\" in rel:
             return _text_response(http.HTTPStatus.NOT_FOUND, "not found")
-        if not target.is_file():
+        try:
+            target = (self.overlay_dir / rel).resolve()
+            target.relative_to(self.overlay_dir.resolve())
+            if not target.is_file():
+                raise FileNotFoundError(rel)
+        except (OSError, ValueError):
             return _text_response(http.HTTPStatus.NOT_FOUND, "not found")
         ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
         if ctype.startswith("text/") or ctype in ("application/javascript", "application/json"):

@@ -16,10 +16,25 @@ def test_build_config_from_args():
 
 
 def test_check_command_prints_effective_config(capsys):
+    try:
+        import sounddevice  # noqa: F401
+
+        portaudio_ok = True
+    except Exception:
+        portaudio_ok = False
     rc = main(["check", "--model", "fake", "--no-browser"])
     out = capsys.readouterr().out
-    assert rc in (0, 1)              # 1 only if sounddevice's PortAudio is missing on this box
+    assert rc == (0 if portaudio_ok else 1)
+    assert ("ok   sounddevice" if portaudio_ok else "MISSING sounddevice") in out
     assert '"model": "fake"' in out
+
+
+def test_runtime_errors_are_clean(monkeypatch, capsys):
+    import zoomlt.cli as cli
+
+    monkeypatch.setattr(cli, "_run_pipeline", lambda cfg: (_ for _ in ()).throw(RuntimeError("PortAudio library not found")))
+    assert main(["run"]) == 2
+    assert "PortAudio library not found" in capsys.readouterr().err
 
 
 def test_check_hides_the_zoom_token(capsys):
@@ -56,3 +71,14 @@ def test_parec_backend_requires_the_binary(monkeypatch):
 
     with pytest.raises(RuntimeError, match="parec not found"):
         ParecSource()
+
+
+def test_env_var_supplies_zoom_token(monkeypatch):
+    monkeypatch.setenv("ZOOMLT_ZOOM_CC_URL", "https://wmcc.zoom.us/closedcaption?id=9&signature=s")
+    cfg = build_config(make_parser().parse_args(["run"]))
+    assert cfg.zoom_cc.api_token_url.endswith("signature=s")
+
+
+def test_host_flag(monkeypatch):
+    cfg = build_config(make_parser().parse_args(["run", "--host", "0.0.0.0", "--port", "0"]))
+    assert cfg.server.host == "0.0.0.0"

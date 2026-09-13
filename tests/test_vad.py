@@ -26,13 +26,16 @@ def test_state_carries_between_frames(es_audio):
     vad2 = StreamingVad()
     b = [vad2(es_audio[i * FRAME_SAMPLES:(i + 1) * FRAME_SAMPLES]) for i in range(40)]
     assert np.allclose(a, b)
-    # resetting mid-stream changes the answer for the next frames (state matters)
+    # the state matters: resetting mid-stream changes the answer for the next frame...
     vad3 = StreamingVad()
     for i in range(20):
         vad3(es_audio[i * FRAME_SAMPLES:(i + 1) * FRAME_SAMPLES])
     vad3.reset()
     c = vad3(es_audio[20 * FRAME_SAMPLES:21 * FRAME_SAMPLES])
-    assert c != a[20] or True  # a reset is allowed to coincide; just ensure no exception
+    assert abs(c - a[20]) > 1e-3
+    # ...and a frame seen in isolation differs from the same frame seen in context
+    lone = StreamingVad()(es_audio[20 * FRAME_SAMPLES:21 * FRAME_SAMPLES])
+    assert abs(lone - a[20]) > 1e-3
 
 
 def test_rejects_bad_frame():

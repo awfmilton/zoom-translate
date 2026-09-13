@@ -31,7 +31,9 @@ Everything is open source (MIT / Apache-2.0 / OpenMDW models). Audio never leave
 
 ## Quick start
 
-Requirements: Python 3.10+, ~2 GB RAM for the default model, ~1 GB disk for models.
+Requirements: Python 3.10+, ~2 GB RAM for the default model, ~1 GB disk for models. Linux also
+needs the PortAudio library for the `sounddevice` backend (`sudo apt install libportaudio2`, Fedora:
+`sudo dnf install portaudio`); the default Linux capture path (`parec`) does not need it.
 
 ```bash
 git clone https://github.com/awfmilton/zoom-translate
@@ -59,8 +61,9 @@ zoomlt file recording.mp3 -l es
 zoomlt file recording.mp3 --engine nemotron -l hi
 ```
 
-`Ctrl+C` stops. `--transcript meeting.jsonl` keeps every final caption. `zoomlt download` fetches the
-models ahead of a meeting.
+`Ctrl+C` stops. `--transcript meeting.jsonl` keeps every final caption (file created private to your
+user). `zoomlt download` fetches the models ahead of a meeting. Exit codes: 2 for a configuration or
+device problem reported before the meeting starts, 3 if the pipeline died mid-run.
 
 ### What `-l` does
 
@@ -104,7 +107,10 @@ virtual device (`brew install --cask blackhole-2ch`, reboot if asked), then:
    Multi-Output Device; set the level on the real output beforehand.)
 3. `zoomlt run --device BlackHole -l es`
 
-Zoom's microphone setting stays on your real mic; only the speaker output changes.
+macOS asks for **Microphone** access for your terminal app (Terminal, iTerm, VS Code) the first
+time any input device is opened, BlackHole included. Allow it, or the app hears silence (System
+Settings → Privacy & Security → Microphone). Zoom's microphone setting stays on your real mic; only
+the speaker output changes.
 
 ### Linux (PulseAudio / PipeWire)
 
@@ -130,8 +136,9 @@ The overlay is a normal browser tab, so use whatever keeps a window on top:
   (`Win+Ctrl+T`), or dock the browser beside Zoom.
 * **macOS:** a small browser window next to Zoom; Chrome/Edge users can pop the page into a
   floating *Document Picture-in-Picture* window from the browser's media controls.
-* **Any OS:** a second monitor, or a phone/tablet on the same Wi-Fi (set `host = "0.0.0.0"` in the
-  config to expose the page on your LAN; only on a network you trust).
+* **Any OS:** a second monitor, or a phone/tablet on the same Wi-Fi: `zoomlt run --host 0.0.0.0 ...`
+  prints a URL with a per-run token for other devices. The page is served without encryption, so
+  only do this on a network you trust.
 
 `http://127.0.0.1:8765/?compact=1` shows only the last three lines with no toolbar: a narrow strip
 along the bottom of the screen. Keys: `space` pause, `c` compact, `o` show the original text
@@ -146,11 +153,19 @@ every participant behind the normal **Show Captions** button. It is free; the **
    API token to integrate with 3rd-party closed captioning services*.
 2. In the meeting: **Show Captions** → up-arrow → *Set up manual captioner* → **Copy the API token**
    (the host can also assign you as captioner so you copy it yourself).
-3. `zoomlt run -l es --zoom-cc-url "https://wmcc.zoom.us/closedcaption?id=...&signature=..."`
+3. Give the token to the app. It is a secret (anyone holding it can write captions into your
+   meeting), so prefer the environment or the config file over the command line, which shows up
+   in process lists and shell history:
+
+   ```bash
+   export ZOOMLT_ZOOM_CC_URL="https://wmcc.zoom.us/closedcaption?id=...&signature=..."   # or [zoom_cc] in config.toml
+   zoomlt run -l es
+   ```
 
 Only *final* captions are pushed, at most one request per 0.8 s (each post replaces the caption
 line; Zoom shows two lines). Participants have to click *Show Captions*. The token only works for
-that meeting and is a secret: `zoomlt check` hides it and nothing logs it.
+that meeting; `zoomlt check` hides it and nothing logs it. `config.toml` and `*.jsonl` transcripts
+are git-ignored for the same reason.
 
 Why not Zoom's own translated captions? They need a Business Plus / Enterprise plan or the paid
 Translated Captions add-on. Zoom's Meeting SDK raw-audio access needs a Marketplace app and, since
@@ -241,8 +256,9 @@ Copy `config.example.toml` to `config.toml`, edit, and run `zoomlt run -c config
 ## How it works
 
 1. **Capture** (`zoomlt/audio/capture.py`): WASAPI / PortAudio / parec → queue → 16 kHz mono
-   (libswresample via PyAV). A live source drops its oldest 20 s if the consumer stalls, so captions
-   never drift minutes behind; the stream clock is corrected for the gap.
+   (libswresample via PyAV). The device is opened before any model loads, so a wrong device fails
+   fast. A live source drops its oldest 20 s if the consumer stalls, the stream clock is corrected
+   for the gap, and driver overruns are counted and reported.
 2. **VAD** (`zoomlt/vad.py`): Silero VAD v6 (the ONNX file that ships with faster-whisper), run
    frame-by-frame with its LSTM state carried across 32 ms frames.
 3. **Segmenter** (`zoomlt/segmenter.py`): speech starts above 0.5 probability (with 320 ms pre-roll),
@@ -254,10 +270,13 @@ Copy `config.example.toml` to `config.toml`, edit, and run `zoomlt run -c config
    repetition loops), language restricted to `-l`, and per-segment hallucination filters. Nemotron
    keeps one streaming state per utterance, so partial captions only process the new audio.
 5. **MT** (`zoomlt/mt.py`): CTranslate2 Marian / Argos models, sentence-split, batched.
-6. **Pipeline** (`zoomlt/pipeline.py`): one decode worker; a newer partial replaces a waiting one and
-   a final replaces its utterance's partial, so a slow CPU can never queue more than one utterance.
-7. **Server** (`zoomlt/server.py`): one port, static overlay + WebSocket. Late-joining windows get
-   the last 200 finals.
+6. **Pipeline** (`zoomlt/pipeline.py`): one decode worker. A newer partial replaces a waiting one, a
+   final replaces its utterance's partial, stale partials are skipped, the partial cadence stretches
+   to match the decoder's speed, and when the recogniser falls behind real time the oldest finals
+   are shed (counted and shown in the overlay status) rather than queued forever.
+7. **Server** (`zoomlt/server.py`): one port, static overlay + WebSocket. Only loopback `Host`
+   headers are served (DNS-rebinding guard), cross-origin WebSocket handshakes are refused, and LAN
+   mode requires a per-run token. Late-joining windows get the last 200 finals.
 
 ## Tests
 

@@ -24,7 +24,13 @@ from zoomlt.audio.capture import AudioSource
 from zoomlt.config import Config
 from zoomlt.mt import Translator
 from zoomlt.segmenter import Segmenter, SegmentEvent
-from zoomlt.vad import StreamingVad
+from zoomlt.vad import FRAME_MS, StreamingVad
+
+# Back-pressure limits for the decode queue. Past these, the oldest finals are shed: a caption
+# that arrives 30 s late is worse than a gap, and without a bound the queue grows forever
+# whenever the recogniser is slower than real time.
+MAX_QUEUED_FINALS = 2
+MAX_QUEUED_AUDIO_S = 20.0
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +68,9 @@ class PipelineStats:
     audio_total_s: float = 0.0
     backlog: int = 0
     last_lag_s: float = 0.0
+    shed: int = 0                    # finals discarded because the recogniser fell too far behind
+    stale_partials_skipped: int = 0
+    audio_overflows: int = 0         # capture-driver overruns (samples lost before the queue)
     started_at: float = field(default_factory=time.time)
 
     @property
@@ -73,6 +82,14 @@ class PipelineStats:
         d["realtime_factor"] = round(self.realtime_factor, 3)
         d["type"] = "status"
         return d
+
+
+def open_transcript(path: str):
+    """Append-only transcript, created readable by the owner only (it is a meeting record)."""
+    import os
+
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    return os.fdopen(fd, "a", encoding="utf-8")
 
 
 class _Job:
@@ -109,13 +126,15 @@ class Pipeline:
         self._cv = threading.Condition()
         self._stop = threading.Event()
         self._worker: Optional[threading.Thread] = None
+        self._busy = False
+        self._base_partial_frames = self.segmenter.partial_interval_frames
         self._utterance_id = 0
         self._partial_shown_for: Optional[int] = None   # utterance id whose partial is on screen
         self._wall_start = time.monotonic()
         self._stream_offset_s = 0.0
         self._transcript = None
         if cfg.server.transcript_path:
-            self._transcript = open(cfg.server.transcript_path, "a", encoding="utf-8")
+            self._transcript = open_transcript(cfg.server.transcript_path)
 
     # -- lifecycle -------------------------------------------------------------------------------
 
@@ -125,8 +144,12 @@ class Pipeline:
             self._worker.start()
 
     def stop(self) -> None:
-        self._stop.set()
+        """Stop soon: pending partials are dropped and only the newest final is still decoded."""
         with self._cv:
+            finals = [j for j in self._jobs if j.event.kind != "partial"]
+            self._jobs = collections.deque(finals[-1:])
+            self.stats.backlog = len(self._jobs)
+            self._stop.set()
             self._cv.notify_all()
         if self._worker is not None:
             self._worker.join(timeout=30)
@@ -158,6 +181,7 @@ class Pipeline:
                     now = time.monotonic()
                     if self.on_status and now - last_status >= self.status_interval_s:
                         last_status = now
+                        self.stats.audio_overflows = getattr(source, "overflows", 0)
                         self._emit_status()
                 for ev in self.segmenter.flush():
                     self._enqueue(ev)
@@ -177,14 +201,30 @@ class Pipeline:
                 self._utterance_id += 1
                 self.stats.utterances += 1
             self._jobs.append(job)
+            self._shed_locked()
             self.stats.backlog = len(self._jobs)
             self._cv.notify()
+
+    def _shed_locked(self) -> None:
+        """Drop the oldest queued finals once the backlog exceeds the limits (lock held)."""
+        while True:
+            finals = [j for j in self._jobs if j.event.kind != "partial"]
+            queued_s = sum(j.event.duration_s for j in self._jobs)
+            if len(finals) <= MAX_QUEUED_FINALS and queued_s <= MAX_QUEUED_AUDIO_S:
+                return
+            victim = finals[0]
+            self._jobs = collections.deque(j for j in self._jobs if j is not victim)
+            self.stats.shed += 1
+            if self.stats.shed in (1, 5) or self.stats.shed % 25 == 0:
+                log.warning("recogniser is behind real time; skipped %d utterance(s) so far. "
+                            "Use a smaller model, --no-partials, or --engine nemotron.", self.stats.shed)
 
     def _drain_and_stop(self) -> None:
         """Let the worker finish what is queued (finals matter), then stop it."""
         with self._cv:
-            deadline = time.monotonic() + 60
-            while self._jobs and not self._stop.is_set() and time.monotonic() < deadline:
+            queued_s = sum(j.event.duration_s for j in self._jobs)
+            deadline = time.monotonic() + 60 + 3 * queued_s
+            while (self._jobs or self._busy) and not self._stop.is_set() and time.monotonic() < deadline:
                 self._cv.wait(timeout=0.2)
         self.stop()
 
@@ -208,18 +248,44 @@ class Pipeline:
                     continue
                 job = self._jobs.popleft()
                 self.stats.backlog = len(self._jobs)
+                self._busy = True
                 self._cv.notify_all()
             try:
-                self._process(job)
+                if job.event.kind == "partial" and self._partial_is_stale(job):
+                    self.stats.stale_partials_skipped += 1
+                else:
+                    self._process(job)
             except Exception:
                 log.exception("caption job failed")
+            finally:
+                with self._cv:
+                    self._busy = False
+                    self._cv.notify_all()
+
+    def _partial_is_stale(self, job: _Job) -> bool:
+        """A partial that waited longer than the partial interval, or whose utterance already
+        ended, would only delay the final behind a full decode of the same audio."""
+        if self._stop.is_set():
+            return True
+        if self._utterance_id != job.utterance_id or not self.segmenter.in_speech:
+            return True
+        interval_s = max(1.0, self.segmenter.partial_interval_frames * FRAME_MS / 1000.0)
+        return (time.monotonic() - job.queued_wall) > interval_s
 
     def _process(self, job: _Job) -> None:
         ev, mode = job.event, self.cfg.asr.mode
         is_partial = ev.kind == "partial"
         task = "translate" if mode == "translate" else "transcribe"
-        res = self.engine.transcribe(ev.audio, task=task, is_partial=is_partial, utterance_id=job.utterance_id)
+        audio = ev.audio
+        window = int(self.cfg.asr.partial_window_s * 16000)
+        if is_partial and window > 0 and not getattr(self.engine, "streaming", False) and audio.shape[0] > window:
+            audio = audio[-window:]      # a non-streaming decoder re-reads everything: cap the cost
+        res = self.engine.transcribe(audio, task=task, is_partial=is_partial, utterance_id=job.utterance_id)
         self.stats.decode_total_s += res.decode_s
+        if is_partial:
+            # never ask for partials faster than the recogniser can produce them
+            wanted = int(res.decode_s * 1.5 * 1000 / FRAME_MS)
+            self.segmenter.partial_interval_frames = max(self._base_partial_frames, wanted)
         self.stats.dropped_segments += len(res.dropped)
         if not is_partial:
             self.stats.audio_total_s += res.duration_s

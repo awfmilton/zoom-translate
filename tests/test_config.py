@@ -54,3 +54,10 @@ def test_language_codes_and_max_utterance_are_validated():
         Config.from_dict({"asr": {"languages": ["spanish"]}})
     with pytest.raises(ValueError, match="max_utterance_s"):
         Config.from_dict({"vad": {"max_utterance_s": 2.0}})
+
+
+def test_zoom_token_url_is_validated_without_echo():
+    with pytest.raises(ValueError) as exc:
+        Config.from_dict({"zoom_cc": {"api_token_url": "http://not-https/closedcaption?id=1"}})
+    assert "not shown" in str(exc.value) and "not-https" not in str(exc.value)
+    Config.from_dict({"zoom_cc": {"api_token_url": "https://wmcc.zoom.us/closedcaption?id=1&signature=x"}})

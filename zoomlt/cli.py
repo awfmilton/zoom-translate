@@ -31,9 +31,11 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--asr-device", choices=["auto", "cpu", "cuda"], help="where Whisper runs")
     p.add_argument("--compute-type", help="int8 (CPU default), float16 (GPU), float32")
     p.add_argument("--port", type=int, help="overlay port (default 8765)")
+    p.add_argument("--host", help="overlay bind address (default 127.0.0.1; 0.0.0.0 shares it on your LAN with a per-run token)")
     p.add_argument("--no-browser", action="store_true", help="do not open the overlay automatically")
     p.add_argument("--no-partials", action="store_true", help="only show finished sentences (less CPU)")
-    p.add_argument("--zoom-cc-url", help="Zoom third-party caption API token URL: push captions into the meeting")
+    p.add_argument("--zoom-cc-url", help="Zoom caption API token URL (pushes captions into the meeting). Prefer the "
+                                         "ZOOMLT_ZOOM_CC_URL environment variable or config.toml: command lines show up in process lists")
     p.add_argument("--transcript", help="append final captions to this JSONL file")
     p.add_argument("-v", "--verbose", action="store_true")
 
@@ -50,7 +52,8 @@ def build_config(args: argparse.Namespace) -> Config:
         "audio.device": getattr(args, "device", None),
         "audio.backend": getattr(args, "backend", None),
         "server.port": getattr(args, "port", None),
-        "zoom_cc.api_token_url": getattr(args, "zoom_cc_url", None),
+        "server.host": getattr(args, "host", None),
+        "zoom_cc.api_token_url": getattr(args, "zoom_cc_url", None) or os.environ.get("ZOOMLT_ZOOM_CC_URL") or None,
         "server.transcript_path": getattr(args, "transcript", None),
     }
     if getattr(args, "no_browser", False):
@@ -153,17 +156,9 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
-_LOOPBACK_HINTS = ("loopback", "monitor", "blackhole", "cable", "stereo mix", "what u hear", "virtual", "soundflower", "loop", "parec:")
-
-
-def _looks_like_loopback(name: str) -> bool:
-    n = (name or "").lower()
-    return any(h in n for h in _LOOPBACK_HINTS)
-
-
 def _run_pipeline(cfg: Config) -> int:
     from zoomlt.asr import build_engine
-    from zoomlt.audio.capture import open_source
+    from zoomlt.audio.capture import looks_like_loopback, open_source
     from zoomlt.mt import NoopTranslator, build_translator
     from zoomlt.pipeline import Caption, Pipeline, PipelineStats
     from zoomlt.server import CaptionServer
@@ -172,15 +167,40 @@ def _run_pipeline(cfg: Config) -> int:
         logging.getLogger(noisy).setLevel(logging.WARNING)
     source = open_source(cfg.audio)
     log.info("audio source: %s", source.describe())
-    if cfg.audio.backend != "file" and not _looks_like_loopback(source.name):
+    if cfg.audio.backend != "file" and not looks_like_loopback(source.name):
         log.warning("'%s' looks like a microphone, not a loopback/monitor device. Zoom's audio arrives on "
-                    "a loopback device (Windows: WASAPI loopback, macOS: BlackHole, Linux: 'Monitor of ...'); "
+                    "a loopback device (Windows: WASAPI loopback, macOS: BlackHole, Linux: the output's monitor); "
                     "see README 'Routing Zoom audio'. Run `zoomlt devices` and pass --device.", source.name)
+    try:
+        source.ensure_started()          # open the device now: a bad device must fail before models load
+    except Exception as exc:
+        log.error("could not open the audio device: %s", exc)
+        return 2
+    if cfg.server.transcript_path:
+        from zoomlt.pipeline import open_transcript
 
-    log.info("loading Whisper '%s' (first run downloads the model)...", cfg.asr.model)
-    engine = build_engine(cfg.asr)
-    engine.warmup()
-    translator = build_translator(cfg.mt) if cfg.asr.mode == "dual" else NoopTranslator()
+        try:
+            open_transcript(cfg.server.transcript_path).close()
+        except OSError as exc:
+            log.error("cannot write the transcript file %s: %s", cfg.server.transcript_path, exc)
+            source.stop()
+            return 2
+
+    log.info("loading %s (first run downloads the model)...",
+             f"Whisper '{cfg.asr.model}'" if cfg.asr.engine == "whisper" else "Nemotron 3.5 ASR")
+    try:
+        engine = build_engine(cfg.asr)
+        engine.warmup()
+    except Exception as exc:
+        log.error("could not start the recogniser: %s", exc)
+        source.stop()
+        return 2
+    languages = cfg.asr.languages or ["es", "hi"]
+    translator = build_translator(cfg.mt, install_languages=languages) if cfg.asr.mode == "dual" else NoopTranslator()
+    if cfg.asr.mode == "dual":
+        ready = translator.prepare([l for l in languages if l != cfg.mt.target])
+        for lang, ok in ready.items():
+            log.info("translation %s->%s: %s", lang, cfg.mt.target, "ready" if ok else "NOT available (transcript only)")
 
     pusher = None
     if cfg.zoom_cc.api_token_url:
@@ -203,8 +223,14 @@ def _run_pipeline(cfg: Config) -> int:
                   cfg.server.host, cfg.server.port, server.error or "timeout")
         source.stop()
         return 2
-    url = f"http://{cfg.server.host}:{server.port}/"
-    print(f"\n  Overlay: {url}   (keep this window on top of Zoom)\n", flush=True)
+    url = server.url()
+    print(f"\n  Overlay: {url}   (keep this window on top of Zoom)", flush=True)
+    if server.token:
+        lan = _lan_address()
+        log.warning("the overlay is reachable from your network without encryption; the URL carries a per-run token")
+        if lan:
+            print(f"  On another device: {server.url(lan)}", flush=True)
+    print(flush=True)
     if cfg.server.open_browser:
         try:
             webbrowser.open(url)
@@ -214,11 +240,14 @@ def _run_pipeline(cfg: Config) -> int:
     def on_caption(cap: Caption) -> None:
         server.publish(cap.to_dict())
         if cap.kind == "final":
+            if pusher and cap.english:
+                pusher.push(cap.english)         # before printing: a console encoding error must not lose it
             shown = cap.english or cap.source_text or ""
             extra = f"  [{cap.source_text}]" if cap.english and cap.source_text else ""
-            print(f"[{cap.source_lang or '??'} {cap.lag_s:4.1f}s] {shown}{extra}", flush=True)
-            if pusher and cap.english:
-                pusher.push(cap.english)
+            try:
+                print(f"[{cap.source_lang or '??'} {cap.lag_s:4.1f}s] {shown}{extra}", flush=True)
+            except UnicodeEncodeError:          # legacy Windows console code pages
+                print(f"[{cap.source_lang or '??'} {cap.lag_s:4.1f}s] {shown.encode('ascii', 'replace').decode()}", flush=True)
         elif cap.kind == "retract":
             pass
         elif log.isEnabledFor(logging.DEBUG):
@@ -229,11 +258,13 @@ def _run_pipeline(cfg: Config) -> int:
 
     pipeline = Pipeline(cfg, engine, translator, on_caption, on_status)
     stop_requested = threading.Event()
+    failure: list = []
 
     def run():
         try:
             pipeline.run(source)
-        except Exception:
+        except Exception as exc:
+            failure.append(exc)
             log.exception("pipeline stopped with an error")
         finally:
             stop_requested.set()
@@ -254,9 +285,21 @@ def _run_pipeline(cfg: Config) -> int:
         server.shutdown()
     s = pipeline.stats
     if s.finals:
+        extra = f", {s.shed} skipped for falling behind" if s.shed else ""
         print(f"\n{s.finals} captions, real-time factor {s.realtime_factor:.2f} "
-              f"(under 1.0 keeps up), {s.dropped_segments} hallucinated segments dropped", flush=True)
-    return 0
+              f"(under 1.0 keeps up), {s.dropped_segments} hallucinated segments dropped{extra}", flush=True)
+    return 3 if failure else 0
+
+
+def _lan_address() -> Optional[str]:
+    import socket
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("10.255.255.255", 1))    # no packets are sent; picks the outbound interface
+            return sock.getsockname()[0]
+    except OSError:
+        return None
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -326,10 +369,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = make_parser()
     args = parser.parse_args(argv)
     level = "DEBUG" if getattr(args, "verbose", False) else os.environ.get("ZOOMLT_LOG", "INFO")
+    for stream in (sys.stdout, sys.stderr):      # Devanagari on a legacy Windows console must not crash
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except Exception:  # pragma: no cover
+                pass
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%H:%M:%S")
     try:
         return int(args.func(args) or 0)
-    except ValueError as exc:
+    except (ValueError, RuntimeError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
