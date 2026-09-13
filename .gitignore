@@ -1,0 +1,19 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+
+# local runtime output
+*.jsonl
+config.toml
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,75 @@
+:root {
+  --bg: #0f1115;
+  --fg: #f2f4f8;
+  --dim: #9aa3b2;
+  --accent: #6ee7b7;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --font: 28px;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Noto Sans Devanagari", sans-serif;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; font-size: 13px; color: var(--dim);
+  border-bottom: 1px solid #1f242d; background: #12151b;
+  user-select: none;
+}
+#bar .spacer { flex: 1; }
+#bar button {
+  background: #1b2029; color: var(--fg); border: 1px solid #2a303b; border-radius: 6px;
+  padding: 3px 8px; font-size: 12px; cursor: pointer;
+}
+#bar button:hover { background: #262c38; }
+#bar button.on { border-color: var(--accent); color: var(--accent); }
+#title { font-weight: 600; color: var(--fg); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); display: inline-block; }
+.dot.ok { background: var(--accent); }
+.dot.warn { background: var(--warn); }
+#lag.slow { color: var(--warn); }
+#lag.bad { color: var(--bad); }
+
+#captions {
+  flex: 1; overflow-y: auto; padding: 14px 18px 6px;
+  font-size: var(--font); line-height: 1.35;
+  scroll-behavior: smooth;
+}
+.cap { margin: 0 0 10px; display: flex; gap: 12px; align-items: baseline; }
+.cap .lang {
+  flex: none; font-size: 0.45em; color: var(--dim); text-transform: uppercase;
+  border: 1px solid #2a303b; border-radius: 4px; padding: 1px 5px; min-width: 2.2em; text-align: center;
+}
+.cap .text { flex: 1; }
+.cap .src { display: block; font-size: 0.6em; color: var(--dim); margin-top: 2px; }
+body:not(.show-source) .cap .src { display: none; }
+.cap.new .text { animation: pop 300ms ease-out; }
+@keyframes pop { from { opacity: 0.2; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+#partial {
+  padding: 4px 18px 14px; font-size: var(--font); line-height: 1.35;
+  color: var(--dim); font-style: italic; min-height: 1.4em;
+}
+#partial:empty { display: none; }
+#hint { padding: 8px 18px 14px; color: var(--dim); font-size: 14px; }
+#hint:empty, body.has-captions #hint { display: none; }
+
+/* compact: transparent-ish strip for sitting over Zoom */
+body.compact #bar { display: none; }
+body.compact #hint { display: none; }
+body.compact { background: rgba(10, 12, 16, 0.92); }
+body.compact #captions { padding-top: 8px; }
+body.compact .cap:not(:nth-last-child(-n+3)) { display: none; }
+
+body.paused #captions { opacity: 0.85; }
+body.paused::after {
+  content: "paused"; position: fixed; top: 8px; right: 12px; color: var(--warn); font-size: 12px;
+}
+@media (max-width: 500px) { :root { --font: 20px; } #bar { flex-wrap: wrap; } }

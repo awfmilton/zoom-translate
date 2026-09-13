@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>zoomlt live captions</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="bar">
+    <span id="dot" class="dot" title="connection"></span>
+    <span id="title">zoomlt</span>
+    <span id="meta"></span>
+    <span id="lag" title="seconds between the end of speech and the caption"></span>
+    <span class="spacer"></span>
+    <button id="btn-source" title="show the original-language text too (dual/transcribe modes)">original</button>
+    <button id="btn-smaller" title="smaller text">A-</button>
+    <button id="btn-bigger" title="bigger text">A+</button>
+    <button id="btn-compact" title="compact overlay: last lines only, no chrome (press c)">compact</button>
+    <button id="btn-pause" title="freeze the screen (press space)">pause</button>
+    <button id="btn-copy" title="copy the whole transcript">copy</button>
+    <button id="btn-clear" title="clear the screen">clear</button>
+  </header>
+  <main id="captions" aria-live="polite"></main>
+  <div id="partial" class="partial"></div>
+  <div id="hint" class="hint">Waiting for speech. Keep this window on top of Zoom (Windows: PowerToys "Always on top", Win+Ctrl+T; macOS: use a small browser window next to Zoom).</div>
+  <script src="app.js"></script>
+</body>
+</html>

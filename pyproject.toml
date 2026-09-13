@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zoomlt"
+version = "0.1.0"
+description = "Free, local live captions that translate Spanish and Indian-language Zoom audio into English."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+  "faster-whisper>=1.1,<2",   # Whisper on CTranslate2 (CPU int8 or GPU); bundles PyAV and the Silero VAD ONNX model
+  "ctranslate2>=4.4,<5",      # also runs the OPUS-MT / Argos translation models
+  "sentencepiece>=0.2",       # tokenizer for those translation models
+  "sherpa-onnx>=1.13.5",      # NVIDIA Nemotron 3.5 streaming ASR (the accurate Spanish/Hindi option)
+  "onnxruntime>=1.16",        # runs the Silero VAD model
+  "numpy>=1.24",
+  "websockets>=13,<18",       # caption overlay transport (+ tiny static file server)
+  "sounddevice>=0.4.6",       # PortAudio capture: microphones, virtual cables, PulseAudio/PipeWire monitors
+  "huggingface-hub>=0.20",    # model downloads (already required by faster-whisper)
+  "tomli>=2; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+windows = ["PyAudioWPatch>=0.2.12"]   # WASAPI loopback: capture what the speakers play, no virtual cable needed
+argos = ["argostranslate>=1.9"]       # the argostranslate package itself (heavy: stanza + torch); optional
+convert = ["transformers>=4.40", "torch>=2.1"]   # only for `zoomlt convert-mt` (one-time OPUS-MT conversion)
+test = ["pytest>=8"]
+
+[project.scripts]
+zoomlt = "zoomlt.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["zoomlt*"]
+
+[tool.setuptools.package-data]
+zoomlt = ["overlay/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -x"

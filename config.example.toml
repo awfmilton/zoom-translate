@@ -1,0 +1,52 @@
+# zoomlt configuration. Copy to config.toml and run:  zoomlt run -c config.toml
+# Every key is optional; anything omitted keeps the default shown here.
+
+log_level = "INFO"
+
+[audio]
+# "auto" = WASAPI loopback on Windows when PyAudioWPatch is installed, otherwise sounddevice.
+backend = "auto"
+# Device name substring or index from `zoomlt devices`.
+#   Windows (auto/wasapi): leave unset to capture the default speakers Zoom plays into.
+#   macOS: "BlackHole"       (after routing Zoom's speaker output to a Multi-Output Device)
+#   Linux: "Monitor of"      (the PulseAudio/PipeWire monitor of your output)
+# device = "BlackHole"
+
+[vad]
+threshold = 0.5           # speech probability that starts an utterance
+neg_threshold = 0.35      # ...and the level it must fall below to count as silence again
+end_silence_ms = 600      # pause length that finishes a sentence (lower = faster, choppier)
+pre_roll_ms = 320         # audio kept from before speech started
+min_speech_ms = 250       # ignore blips shorter than this
+max_utterance_s = 15.0    # force a caption if someone talks this long without pausing
+
+[asr]
+engine = "whisper"        # whisper = any language, English straight out | nemotron = best for es/hi (+ local MT)
+model = "small"           # Whisper size: tiny | base | small | medium | large-v3   (CPU: small; GPU: large-v3)
+device = "auto"           # auto | cpu | cuda
+compute_type = "auto"     # int8 on CPU, float16 on CUDA
+mode = "translate"        # translate = English only | transcribe = original only | dual = both (needs argos)
+languages = []            # e.g. ["es", "hi"] — restricts language detection to what your team speaks
+beam_size = 1             # 1 is fastest; 3-5 is a little more accurate on a fast machine
+partial_interval_ms = 1200  # 0 disables in-progress captions (halves CPU work)
+# hotwords = "Priya, Kubernetes, Acme"     # names/terms Whisper should spell right
+# initial_prompt = "A software startup team meeting."
+
+[mt]
+engine = "ct2"            # used in mode = "dual" (and always with engine = "nemotron"): ct2 | argos | none
+auto_install = true       # download the es->en / hi->en models on first use (one time)
+beam_size = 2
+# model_dirs = { hi = "/path/to/your/ctranslate2/model" }   # your own converted OPUS-MT model
+
+[server]
+host = "127.0.0.1"
+port = 8765
+open_browser = true
+history = 200
+# transcript_path = "meeting-captions.jsonl"
+
+[zoom_cc]
+# Paste the meeting's caption API token URL to push English captions into Zoom for everyone.
+# api_token_url = "https://wmcc.zoom.us/closedcaption?id=...&ns=...&expire=...&sparams=...&signature=..."
+lang = "en-US"
+min_interval_ms = 800
