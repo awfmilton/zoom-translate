@@ -5,7 +5,7 @@ import urllib.parse
 import pytest
 
 from zoomlt.config import ZoomCcConfig
-from zoomlt.zoom_cc import ZoomCaptionPusher, build_url
+from zoomlt.zoom_cc import ZoomCaptionPusher, build_url, parse_seq, seq_url
 
 TOKEN = "https://wmcc.zoom.us/closedcaption?id=123&ns=abc&expire=86400&sparams=id%2Cns%2Cexpire&signature=sig"
 
@@ -21,6 +21,9 @@ def test_build_url_adds_seq_and_lang_keeping_token_params():
 
 class FakeResponse(io.BytesIO):
     status = 200
+
+    def __init__(self, body: bytes = b""):
+        super().__init__(body)
 
     def __enter__(self):
         return self
@@ -110,6 +113,8 @@ def test_sequence_continues_after_a_restart(tmp_path):
     seqs = []
 
     def opener(req, timeout):
+        if req.get_method() == "GET":
+            raise OSError("this meeting has no seq endpoint")
         seqs.append(int(dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(req.full_url).query))["seq"]))
         return FakeResponse()
 
@@ -128,3 +133,58 @@ def test_sequence_continues_after_a_restart(tmp_path):
     other.push("different meeting")
     other.stop()
     assert seqs == [1, 2, 1]                     # a different token is a different meeting
+
+
+def test_seq_url_appends_to_the_path_and_keeps_the_signature():
+    url = seq_url(TOKEN)
+    parts = urllib.parse.urlsplit(url)
+    assert parts.path == "/closedcaption/seq"
+    q = dict(urllib.parse.parse_qsl(parts.query))
+    assert q["signature"] == "sig" and q["id"] == "123"
+    assert "seq" not in q
+
+
+def test_parse_seq_accepts_both_shapes():
+    assert parse_seq(" 41 ") == 41
+    assert parse_seq('{"seq": 7}') == 7
+    assert parse_seq('{"sequence": "9"}') == 9
+    assert parse_seq("12") == 12
+    assert parse_seq("not a number") is None
+    assert parse_seq('{"other": 3}') is None
+
+
+def test_resume_prefers_zooms_own_sequence_number(tmp_path):
+    store = tmp_path / "seq.json"
+    posted = []
+
+    def opener(req, timeout):
+        if req.get_method() == "GET":
+            return FakeResponse(b"40")           # Zoom says it last accepted 40
+        posted.append(int(dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(req.full_url).query))["seq"]))
+        return FakeResponse()
+
+    p = ZoomCaptionPusher(ZoomCcConfig(api_token_url=TOKEN, min_interval_ms=10),
+                          opener=opener, seq_store=store).start()
+    p.push("hello")
+    p.stop()
+    assert posted == [41]
+
+
+def test_resume_falls_back_to_the_local_file_when_zoom_does_not_answer(tmp_path):
+    store = tmp_path / "seq.json"
+    posted = []
+
+    def opener(req, timeout):
+        if req.get_method() == "GET":
+            raise OSError("no such endpoint")
+        posted.append(int(dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(req.full_url).query))["seq"]))
+        return FakeResponse()
+
+    cfg = ZoomCcConfig(api_token_url=TOKEN, min_interval_ms=10)
+    first = ZoomCaptionPusher(cfg, opener=opener, seq_store=store).start()
+    first.push("one")
+    first.stop()
+    second = ZoomCaptionPusher(cfg, opener=opener, seq_store=store).start()
+    second.push("two")
+    second.stop()
+    assert posted == [1, 2]

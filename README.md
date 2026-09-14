@@ -16,6 +16,7 @@ Zoom speaker output ──► loopback capture ──► Silero VAD ──► sp
   * **Whisper** (default) via [faster-whisper](https://github.com/SYSTRAN/faster-whisper), CTranslate2
     int8 on CPU. Its built-in *translate* task turns Spanish, Hindi, Tamil, Telugu, Marathi, Gujarati,
     Kannada, Malayalam, Bengali, Punjabi, Urdu and 80+ other languages into English in one pass.
+    [docs/languages.md](docs/languages.md) says what each one is actually like in practice.
   * **Nemotron** for Spanish and Hindi: NVIDIA's Nemotron 3.5 streaming recogniser through
     [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), about 4 % word error rate on Spanish and
     7 % on Hindi (Whisper `small` is around 38 % on Hindi), faster than Whisper on CPU, then a local
@@ -31,7 +32,8 @@ Everything is open source (MIT / Apache-2.0 / OpenMDW models). Audio never leave
 
 ## Quick start
 
-Requirements: Python 3.10+, ~2 GB RAM for the default model, ~1 GB disk for models. Linux also
+Step-by-step instructions for each operating system are in **[INSTALL.md](INSTALL.md)**. In brief:
+Python 3.10+, ~2 GB RAM for the default model, ~1 GB disk for models. Linux also
 needs the PortAudio library for the `sounddevice` backend (`sudo apt install libportaudio2`, Fedora:
 `sudo dnf install portaudio`); the default Linux capture path (`parec`) does not need it.
 
@@ -47,6 +49,10 @@ zoomlt check                     # effective config + the checks that otherwise 
 zoomlt devices                   # which device carries Zoom's audio (see "Routing Zoom audio")
 zoomlt run -l es -l hi           # start; the overlay opens in your browser
 ```
+
+**Cost: nothing, ever.** No subscription, no API key, no account, no server, nothing to deploy.
+[docs/cost-and-hosting.md](docs/cost-and-hosting.md) spells that out, including what the prices
+quoted in the other documents refer to.
 
 Spanish + Hindi team? Use the accurate engine (one-time ~750 MB download):
 
@@ -304,9 +310,17 @@ the caption POSTs to Zoom's own servers.
 
 ## Further reading
 
-* [`docs/zoom-platform.md`](docs/zoom-platform.md) — which Zoom integration route this app uses and
-  why the Meeting SDK, Realtime Media Streams and Zoom's own translated captions were rejected.
-* [`docs/models.md`](docs/models.md) — the measurements behind the engine and translation-model
+* **[INSTALL.md](INSTALL.md)** — step-by-step setup for Windows, macOS and Linux, and what to do
+  when something does not work.
+* **[docs/zoom-setup.md](docs/zoom-setup.md)** — using it with Zoom, putting captions on screen for
+  everyone, and whether you need a Zoom developer account (you do not).
+* **[docs/languages.md](docs/languages.md)** — what to expect in each language, including Punjabi,
+  Tamil, Telugu, Bengali, Gujarati, Kannada, Malayalam, Marathi and Urdu.
+* **[docs/cost-and-hosting.md](docs/cost-and-hosting.md)** — what it costs (nothing), what the
+  prices quoted elsewhere refer to, and when a server would help.
+* **[docs/zoom-platform.md](docs/zoom-platform.md)** — which Zoom integration route this app uses
+  and why the Meeting SDK, Realtime Media Streams and Zoom's translated captions were rejected.
+* **[docs/models.md](docs/models.md)** — the measurements behind the engine and translation-model
   choices, including the rejected alternatives.
 
 ## Licence

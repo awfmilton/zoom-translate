@@ -28,6 +28,12 @@ log = logging.getLogger(__name__)
 # unreliable, so we refuse to run them in translate mode instead of producing gibberish.
 _TRANSCRIBE_ONLY_MARKERS = ("turbo", "distil")
 
+#: Languages where Whisper's TRANSCRIPTION is unreliable (wrong script, or a repeated-character
+#: loop) even though its direct-to-English TRANSLATION is usable. Measured on real speech for
+#: Punjabi; the rest are the languages OpenAI's own FLEURS table scores at or near 100 % word
+#: error. In these languages the app should stay in "translate" mode.
+WEAK_TRANSCRIPTION_LANGUAGES = {"pa", "te", "ml", "bn", "gu", "kn", "mr"}
+
 
 @dataclass
 class AsrResult:
@@ -76,6 +82,11 @@ def _looks_hallucinated(text: str, drop_phrases: Sequence[str]) -> bool:
     # "the the the the" / a single token repeated: classic Whisper loop output.
     if len(words) >= 6 and len(set(words)) <= max(2, len(words) // 4):
         return True
+    # A single long run of one character, which is what Whisper emits for the Indian languages it
+    # cannot transcribe (measured: 70+ copies of one Gurmukhi character for Punjabi speech).
+    stripped = "".join(lowered.split())
+    if len(stripped) >= 12 and len(set(stripped)) <= 2:
+        return True
     return False
 
 
@@ -98,6 +109,11 @@ class FasterWhisperEngine(AsrEngine):
         bad = [l for l in cfg.languages if l.strip().lower() not in _LANGUAGE_CODES]
         if bad:
             raise ValueError(f"unknown Whisper language code(s) {bad}; use ISO 639-1 such as es, hi, ta, te")
+        weak = sorted(set(cfg.languages) & WEAK_TRANSCRIPTION_LANGUAGES)
+        if weak and cfg.mode != "translate":
+            log.warning("Whisper transcribes %s poorly (wrong script or repeated characters), even though it "
+                        "translates them into English usably. Prefer mode 'translate' for these; in '%s' mode "
+                        "the original-language line will often be wrong.", ", ".join(weak), cfg.mode)
         if cfg.mode == "translate" and is_transcribe_only(cfg.model):
             raise ValueError(
                 f"model {cfg.model!r} is transcription-only and cannot translate. Use asr.model = "

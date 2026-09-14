@@ -35,3 +35,24 @@ def test_fake_engine_sequence_and_partials():
     assert eng.transcribe(audio, "translate").text == "dos"
     assert eng.transcribe(audio, "translate").text == "dos"   # sticks at the last one
     assert eng.calls[0]["partial"] is True and eng.calls[1]["partial"] is False
+
+
+def test_character_loop_output_is_filtered():
+    """Whisper emits one repeated character for the Indian languages it cannot transcribe."""
+    drop = AsrConfig().drop_phrases
+    assert _looks_hallucinated("ੱੱੱੱੱੱੱੱੱੱੱੱੱੱੱੱੱੱ", drop)
+    assert _looks_hallucinated("বববববববববববববববব", drop)
+    assert not _looks_hallucinated("ਅੰਗੂਰੀ ਮੇਰੇ ਗਵਾਂਢੀਆਂ ਦੇ ਘਰ", drop)
+    assert not _looks_hallucinated("aaa", drop)          # too short to judge
+
+
+def test_weak_transcription_languages_warn_outside_translate_mode(caplog):
+    from zoomlt.asr import WEAK_TRANSCRIPTION_LANGUAGES
+
+    assert "pa" in WEAK_TRANSCRIPTION_LANGUAGES
+    with caplog.at_level("WARNING"):
+        try:
+            FasterWhisperEngine(AsrConfig(model="tiny", mode="dual", languages=["pa"], download_root="/nonexistent"))
+        except Exception:
+            pass                                          # the model never loads here; the warning comes first
+    assert any("transcribes pa poorly" in r.getMessage() for r in caplog.records)

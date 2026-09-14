@@ -72,6 +72,39 @@ def _token_key(token_url: str) -> str:
     return hashlib.sha256(token_url.encode("utf-8")).hexdigest()[:16]
 
 
+def seq_url(token_url: str) -> str:
+    """Zoom's GET endpoint for the last sequence number it accepted for this meeting.
+
+    Zoom's own documentation: "The seq number of the last successful send can be obtained through
+    the API: /closedcaption/seq [GET]". It is the caption URL with /seq appended to the path and
+    the same signed query string.
+    """
+    parts = urllib.parse.urlsplit(token_url)
+    path = parts.path.rstrip("/") + "/seq"
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+
+
+def parse_seq(body: str) -> Optional[int]:
+    """Read a sequence number out of Zoom's reply, which may be bare digits or JSON."""
+    body = body.strip()
+    if body.isdigit():
+        return int(body)
+    try:
+        data = json.loads(body)
+    except Exception:
+        return None
+    if isinstance(data, int):
+        return data
+    if isinstance(data, dict):
+        for key in ("seq", "sequence", "last_seq"):
+            value = data.get(key)
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str) and value.isdigit():
+                return int(value)
+    return None
+
+
 def build_url(token_url: str, seq: int, lang: str) -> str:
     parts = urllib.parse.urlsplit(token_url)
     q = dict(urllib.parse.parse_qsl(parts.query, keep_blank_values=True))
@@ -86,10 +119,7 @@ class ZoomCaptionPusher:
             raise ValueError("zoom_cc.api_token_url is not set")
         self.cfg = cfg
         self.seq_store = seq_store
-        # Continue this meeting's numbering if the app was restarted mid-meeting.
-        self.seq = load_seq(cfg.api_token_url, seq_store) if cfg.resume_sequence else 0
-        if self.seq:
-            log.info("continuing this meeting's caption sequence at %d", self.seq + 1)
+        self.seq = 0
         self.sent = 0
         self.failed = 0
         self._q: "queue.Queue[Optional[str]]" = queue.Queue()
@@ -98,8 +128,38 @@ class ZoomCaptionPusher:
         self._stop = threading.Event()
 
     def start(self) -> "ZoomCaptionPusher":
+        if self.cfg.resume_sequence:
+            self.seq = self._resume_seq()
+            if self.seq:
+                log.info("continuing this meeting's caption sequence at %d", self.seq + 1)
         self._thread.start()
         return self
+
+    def _resume_seq(self) -> int:
+        """Where to continue numbering: ask Zoom, and fall back to what we last wrote locally.
+
+        Zoom rejects a caption whose number does not follow the last one it accepted, so a restart
+        mid-meeting (or a meeting someone else already captioned) has to pick up the count.
+        """
+        remote = self._fetch_remote_seq()
+        local = load_seq(self.cfg.api_token_url, self.seq_store)
+        if remote is None:
+            return local
+        if local > remote:
+            # We posted captions Zoom did not count; trust Zoom, it decides what it accepts.
+            log.debug("local caption sequence %d is ahead of Zoom's %d; using Zoom's", local, remote)
+        return remote
+
+    def _fetch_remote_seq(self) -> Optional[int]:
+        req = urllib.request.Request(seq_url(self.cfg.api_token_url), method="GET")
+        try:
+            with self._open(req, timeout=self.cfg.timeout_s) as resp:
+                body = resp.read()
+            text = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else str(body)
+            return parse_seq(text)
+        except Exception as exc:      # best effort: older meetings and offline tests just skip it
+            log.debug("could not read the caption sequence from Zoom: %s", exc)
+            return None
 
     def stop(self, wait: bool = True) -> None:
         """Send what is still queued (the last caption of a meeting matters), then stop."""
