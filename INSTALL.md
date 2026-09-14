@@ -230,8 +230,13 @@ macOS, install BlackHole. On Linux, `sudo apt install pulseaudio-utils`.
 order: add `--no-partials`, switch to `--engine nemotron` if your languages allow it, then drop to
 `--model base`. See [docs/models.md](docs/models.md) for the measured numbers.
 
-**`pip install` fails building something.** You are probably on Python 3.9 or older, or on a very
-new release that has no wheels yet. Python 3.11 or 3.12 is the safest choice.
+**`pip install` fails with "no matching distribution for PyAudioWPatch".** That package ships
+Windows-only binaries, currently for CPython 3.8 through 3.14, and has no source fallback. Either
+your Python is newer than the newest build, in which case install Python 3.12 or 3.13 alongside it,
+or you are not on Windows, in which case drop the `[windows]` part: `pip install -e .`
+
+**`pip install` fails building something else.** You are probably on Python 3.9 or older, or on a
+very new release that has no wheels yet. Python 3.11 or 3.12 is the safest choice.
 
 **The captions are nonsense in an Indian language.** Whisper is weak in several of them. Check
 [docs/languages.md](docs/languages.md) for which engine to use for that language.
