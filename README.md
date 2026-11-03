@@ -325,16 +325,15 @@ the caption POSTs to Zoom's own servers.
 
 ## Roadmap
 
-Planned work ahead (~25+ hours):
+See **[ROADMAP.md](ROADMAP.md)** for the full upcoming engineering plan (~68 hours), including:
 
-1. **Speaker Diarization & Per-Speaker Caption Colouring (~8 hours)**
-   - Integrate lightweight ONNX speaker-embedding clustering (pyannote / sherpa-onnx speaker ID) on VAD segments so the overlay labels and colour-codes distinct speakers during multi-person calls.
-2. **CoreML / Apple Neural Engine Acceleration on macOS (~5 hours)**
-   - Enable CoreML execution provider in `onnxruntime` for Nemotron 3.5 and Silero VAD on Apple Silicon laptops to cut CPU power draw in half.
-3. **Custom Domain Glossary & Post-Edit Rule Engine (~6 hours)**
-   - Extend `config.toml` with deterministic phrase-replacement and terminology-enforcement tables applied before and after CTranslate2 translation.
-4. **Native Desktop Overlay Window (~6 hours)**
-   - Optional frameless always-on-top click-through window (via `pywebview`) so Windows/macOS/Linux users do not need PowerToys or browser Picture-in-Picture workarounds.
+1. **Google Meet Live Captioning & Browser Companion Integration (~14 hours)**
+   - Companion browser extension / WebSocket bridge (`zoomlt/meet_cc.py`) for docking live translated captions inside Google Meet (`meet.google.com`), process-specific audio loopback (`--app chrome`), and active-speaker DOM tagging.
+2. **Audio Device Hot-Plug Recovery & `SRT` / `WebVTT` Subtitle Export (~10 hours)**
+   - Automatic WASAPI/PortAudio stream reconnection on headset unplug/switch, `zoomlt export` CLI for `.srt`/`.vtt` subtitles, and full virtualized overlay scrollback.
+3. **Multilingual Expansion (~10 hours)**
+   - Bidirectional `--target-lang` translation (`en`, `es`, `hi`, `fr`, `de`, `pt`, `ja`, `zh`, `ar`) and localized overlay UI.
+4. **Supporter Donations, Security Review, Infrastructure Review, and Multi-OS GitHub Actions / Pytest Expansion (~34 hours)**
 
 ## Licence
 
