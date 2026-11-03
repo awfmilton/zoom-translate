@@ -26,7 +26,7 @@ Zoom speaker output ──► loopback capture ──► Silero VAD ──► sp
   same captions are pushed *into* Zoom for every participant through Zoom's free third-party
   caption API (no developer account, no Marketplace app).
 
-Everything is open source (MIT / Apache-2.0 / OpenMDW models). Audio never leaves the machine.
+Everything is open source (MPL-2.0 code; MIT / Apache-2.0 / OpenMDW models). Audio never leaves the machine.
 
 ---
 
@@ -323,7 +323,19 @@ the caption POSTs to Zoom's own servers.
 * **[docs/models.md](docs/models.md)** — the measurements behind the engine and translation-model
   choices, including the rejected alternatives.
 
+## Roadmap
+
+Planned work ahead (~25+ hours):
+
+1. **Speaker Diarization & Per-Speaker Caption Colouring (~8 hours)**
+   - Integrate lightweight ONNX speaker-embedding clustering (pyannote / sherpa-onnx speaker ID) on VAD segments so the overlay labels and colour-codes distinct speakers during multi-person calls.
+2. **CoreML / Apple Neural Engine Acceleration on macOS (~5 hours)**
+   - Enable CoreML execution provider in `onnxruntime` for Nemotron 3.5 and Silero VAD on Apple Silicon laptops to cut CPU power draw in half.
+3. **Custom Domain Glossary & Post-Edit Rule Engine (~6 hours)**
+   - Extend `config.toml` with deterministic phrase-replacement and terminology-enforcement tables applied before and after CTranslate2 translation.
+4. **Native Desktop Overlay Window (~6 hours)**
+   - Optional frameless always-on-top click-through window (via `pywebview`) so Windows/macOS/Linux users do not need PowerToys or browser Picture-in-Picture workarounds.
+
 ## Licence
 
-MIT. Models: Whisper (MIT), Nemotron 3.5 ASR (OpenMDW-1.1), OPUS-MT (Apache-2.0), Argos packs
-(CC-BY / MIT per pack), Silero VAD (MIT).
+Mozilla Public License 2.0 (MPL-2.0) for the `zoom-translate` application code (see [LICENSE](LICENSE)). Third-party models retain their respective licences: Whisper (MIT), Nemotron 3.5 ASR (OpenMDW-1.1), OPUS-MT (Apache-2.0), Argos packs (CC-BY / MIT per pack), Silero VAD (MIT).

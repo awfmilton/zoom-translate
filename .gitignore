@@ -11,6 +11,9 @@ dist/
 # local runtime output
 *.jsonl
 config.toml
+.env
+.env.*
+.claude/
 
 # editor / OS
 .vscode/
